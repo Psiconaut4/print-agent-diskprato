@@ -103,10 +103,11 @@ public sealed class NamedPipeIpcServer(
         {
             return request.Command switch
             {
-                "get-status" => IpcResponse.Success(controller.GetStatus()),
+                "get-status" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false)),
+                "get-config" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false), controller.Config.Printer),
                 "pair" => await HandlePairAsync(request, ct).ConfigureAwait(false),
-                "unpair" => HandleUnpair(),
-                "set-printer" => HandleSetPrinter(request),
+                "unpair" => await HandleUnpairAsync(ct).ConfigureAwait(false),
+                "set-printer" => await HandleSetPrinterAsync(request, ct).ConfigureAwait(false),
                 "test-print" => await HandleTestPrintAsync(ct).ConfigureAwait(false),
                 _ => IpcResponse.Failure($"Comando desconhecido: {request.Command}"),
             };
@@ -130,19 +131,19 @@ public sealed class NamedPipeIpcServer(
 
         return outcome switch
         {
-            PairOutcome.Success => IpcResponse.Success(controller.GetStatus()),
+            PairOutcome.Success => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false)),
             PairOutcome.Failure failure => IpcResponse.Failure(failure.Message),
             _ => IpcResponse.Failure("Falha desconhecida no pareamento."),
         };
     }
 
-    private IpcResponse HandleUnpair()
+    private async Task<IpcResponse> HandleUnpairAsync(CancellationToken ct)
     {
         controller.Unpair();
-        return IpcResponse.Success(controller.GetStatus());
+        return IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false));
     }
 
-    private IpcResponse HandleSetPrinter(IpcRequest request)
+    private async Task<IpcResponse> HandleSetPrinterAsync(IpcRequest request, CancellationToken ct)
     {
         if (request.Printer is null)
         {
@@ -150,7 +151,7 @@ public sealed class NamedPipeIpcServer(
         }
 
         controller.UpdatePrinterConfig(request.Printer);
-        return IpcResponse.Success(controller.GetStatus());
+        return IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false));
     }
 
     private async Task<IpcResponse> HandleTestPrintAsync(CancellationToken ct)
@@ -161,7 +162,7 @@ public sealed class NamedPipeIpcServer(
 
         var result = await transport.SendAsync(bytes, ct).ConfigureAwait(false);
         return result.Success
-            ? IpcResponse.Success(controller.GetStatus())
+            ? IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false))
             : IpcResponse.Failure(result.Detail ?? result.ErrorCode?.ToString() ?? "Falha desconhecida na impressao de teste.");
     }
 

@@ -24,7 +24,11 @@ public sealed class IpcResponse
     public string? Error { get; set; }
     public AgentStatusSnapshot? Status { get; set; }
 
-    public static IpcResponse Success(AgentStatusSnapshot? status = null) => new() { Ok = true, Status = status };
+    /// <summary>Só preenchido em resposta a <c>get-config</c> (plano §7.4/Fase 6) — a tela de setup precisa dos valores atuais para pré-preencher os campos.</summary>
+    public Config.PrinterConfig? Printer { get; set; }
+
+    public static IpcResponse Success(AgentStatusSnapshot? status = null, Config.PrinterConfig? printer = null) =>
+        new() { Ok = true, Status = status, Printer = printer };
 
     public static IpcResponse Failure(string error) => new() { Ok = false, Error = error };
 }

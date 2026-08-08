@@ -1,13 +1,14 @@
 using PrintAgent.Host.Config;
 using PrintAgent.Host.Security;
 using PrintAgent.Host.Storage;
+using PrintAgent.Printing;
 using PrintAgent.Transport;
 
 namespace PrintAgent.Host;
 
 /// <summary>Retrato do estado do agente para <c>get-status</c> no named pipe (plano §7.4).</summary>
 public sealed record AgentStatusSnapshot(
-    bool Paired, bool StreamConnected, int QueuedJobs, string Transport, string? PrinterTarget);
+    bool Paired, bool StreamConnected, int QueuedJobs, string Transport, string? PrinterTarget, string PrinterStatus);
 
 /// <summary>
 /// Estado compartilhado entre o <see cref="Worker"/> (loop de impressão) e o
@@ -103,7 +104,14 @@ public sealed class AgentController
         _configStore.Save(_config);
     }
 
-    public AgentStatusSnapshot GetStatus()
+    /// <summary>
+    /// Inclui uma leitura best-effort do estado físico da impressora (plano
+    /// §5.3), separada do <c>StatusReport</c> que o <c>Worker</c> manda pro
+    /// backend (esse ainda não liga a <see cref="IPrinterStatusQuery"/>,
+    /// TODO da Fase 8) — aqui é só para o ícone da bandeja/tela de setup, com
+    /// um teto curto pra nunca travar o pipe numa impressora que não responde.
+    /// </summary>
+    public async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken ct)
     {
         var config = Config;
         return new AgentStatusSnapshot(
@@ -111,6 +119,32 @@ public sealed class AgentController
             StreamConnected,
             _jobStore.GetQueueLength(),
             config.Printer.Transport.ToString(),
-            config.Printer.Transport == PrinterTransportKind.Spooler ? config.Printer.SpoolerName : config.Printer.Host);
+            config.Printer.Transport == PrinterTransportKind.Spooler ? config.Printer.SpoolerName : config.Printer.Host,
+            (await QueryPrinterStatusAsync(config.Printer, ct).ConfigureAwait(false)).ToString());
+    }
+
+    private static async Task<PrinterStatus> QueryPrinterStatusAsync(PrinterConfig printer, CancellationToken ct)
+    {
+        try
+        {
+            if (PrinterTransportFactory.Create(printer) is not IPrinterStatusQuery statusQuery)
+            {
+                return PrinterStatus.Unknown;
+            }
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
+            return await statusQuery.QueryStatusAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // config incompleta (fila/host ainda nao escolhidos) ou driver que
+            // lanca em vez de reportar erro: nunca deixa o pipe cair por isso.
+            return PrinterStatus.Unknown;
+        }
+        catch (OperationCanceledException)
+        {
+            return PrinterStatus.Unknown;
+        }
     }
 }

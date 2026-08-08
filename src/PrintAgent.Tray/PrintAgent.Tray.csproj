@@ -6,4 +6,12 @@
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Só EnumPrinterQueues (lista de filas pra tela de setup) — não referencia
+         PrintAgent.Host: Tray e serviço são processos separados de propósito
+         (Session 0 isolation, plano §7.4); o contrato entre os dois é o JSON
+         do named pipe, não tipos C# compartilhados. -->
+    <ProjectReference Include="..\PrintAgent.Printing\PrintAgent.Printing.csproj" />
+  </ItemGroup>
+
 </Project>
