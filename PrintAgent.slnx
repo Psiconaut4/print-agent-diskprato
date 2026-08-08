@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PrintAgent.Contracts/PrintAgent.Contracts.csproj" />
+    <Project Path="src/PrintAgent.Core/PrintAgent.Core.csproj" />
+    <Project Path="src/PrintAgent.Host/PrintAgent.Host.csproj" />
+    <Project Path="src/PrintAgent.Printing/PrintAgent.Printing.csproj" />
+    <Project Path="src/PrintAgent.Transport/PrintAgent.Transport.csproj" />
+    <Project Path="src/PrintAgent.Tray/PrintAgent.Tray.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PrintAgent.Core.Tests/PrintAgent.Core.Tests.csproj" />
+    <Project Path="tests/PrintAgent.Printing.Tests/PrintAgent.Printing.Tests.csproj" />
+    <Project Path="tests/PrintAgent.Transport.Tests/PrintAgent.Transport.Tests.csproj" />
+  </Folder>
+</Solution>
