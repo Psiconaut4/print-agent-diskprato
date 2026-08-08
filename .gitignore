@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Contratos gerados a cada build por PrintAgent.Contracts (NSwag) — nunca editar a mao
+src/PrintAgent.Contracts/Generated/
+
 # User-specific files
 *.rsuser
 *.suo
