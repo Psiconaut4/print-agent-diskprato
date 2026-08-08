@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <Target Name="NSwagGenerateContracts" BeforeTargets="BeforeBuild" Inputs="$(OpenApiSpec)" Outputs="$(GeneratedContractsFile)">
-    <Exec Command="$(NSwagExe_Net90) openapi2csclient /input:$(OpenApiSpec) /namespace:PrintAgent.Contracts /output:$(GeneratedContractsFile) /GenerateClientClasses:false /GenerateClientInterfaces:false /GenerateDtoTypes:true /JsonLibrary:SystemTextJson /GenerateNullableReferenceTypes:true /GenerateDefaultValues:false /ClassStyle:Poco /RequiredPropertiesMustBeDefined:false"
+    <Exec Command="$(NSwagExe_Net90) openapi2csclient /input:$(OpenApiSpec) /namespace:PrintAgent.Contracts /output:$(GeneratedContractsFile) /GenerateClientClasses:false /GenerateClientInterfaces:false /GenerateDtoTypes:true /JsonLibrary:SystemTextJson /GenerateNullableReferenceTypes:true /GenerateDefaultValues:false /ClassStyle:Poco /RequiredPropertiesMustBeDefined:false /GenerateOptionalPropertiesAsNullable:true"
           EnvironmentVariables="DOTNET_ROLL_FORWARD=LatestMajor" />
   </Target>
 
