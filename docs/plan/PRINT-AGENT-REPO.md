@@ -61,6 +61,18 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
   na Fase 4, adiantado — o Tray (Fase 6) ainda não existe, mas o protocolo
   (`get-status`/`pair`/`unpair`/`set-printer`/`test-print`, JSON por linha)
   já está pronto para ele consumir.
+- **Refatorado em 2026-08-08: fila local trocada de SQLite para arquivos.**
+  A Fase 4 tinha sido entregue com `Microsoft.Data.Sqlite` (schema em
+  `jobs`/`printed`/`pending_acks`). Decisão revertida ainda dentro da
+  janela de retrabalho aceitável — nenhum outro componente depende do
+  formato de persistência, e o volume real (dezenas de jobs simultâneos,
+  no máximo) não justifica um banco relacional embutido. Motivos:
+  arquivo corrompido perde um job; banco corrompido perde a fila inteira.
+  E o suporte consegue abrir a pasta pelo Explorer sem instalar ferramenta
+  nenhuma. `JobStore` foi reescrito sobre `queue/pending/` e
+  `queue/printed/` (§7.1); `Microsoft.Data.Sqlite` saiu do projeto e do
+  instalador. `PrintOrchestrator` e `AckFlusher` não mudaram de
+  responsabilidade, só a implementação de `IJobStore` por baixo.
 
 **Pendências manuais (não automatizáveis por um agente):**
 - O teste de convivência do plano §8 Fase 2 exige uma fila de impressão
@@ -73,8 +85,8 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
 - O loop principal do `Worker` e o servidor do named pipe (Fase 4) não têm
   teste automatizado — são integração pura (SSE + HTTP + IPC reais contra
   backend de verdade). `JobStore` e `PrintOrchestrator`, que concentram a
-  lógica de decisão, estão cobertos por teste contra SQLite real e um
-  `IPrinterTransport` fake.
+  lógica de decisão, estão cobertos por teste contra um diretório temporário
+  real (sem mock de filesystem) e um `IPrinterTransport` fake.
 
 **Próximo passo:** Fase 6 (`PrintAgent.Tray`) — tray icon + tela de setup
 (WinForms) consumindo o named pipe já pronto: pareamento, escolha de fila
@@ -109,7 +121,7 @@ Três coisas que ele **não** é, e que definem o desenho:
 | Trimming | **desligado** | codegen do NSwag e serialização por reflexão quebram com trim; o ganho de tamanho não paga o risco de falha só em produção |
 | Serviço | `Microsoft.Extensions.Hosting.WindowsServices` | start automático no boot, lifecycle, logging |
 | UI | WinForms (`net10.0-windows`), processo separado | tray icon + tela de setup; separado do serviço porque serviço do Windows não tem sessão de desktop (Session 0 isolation) |
-| Fila local | SQLite (`Microsoft.Data.Sqlite`) | precisa sobreviver a reboot; JSON solto não dá transação |
+| Fila local | arquivo — um `.json` por job em `%ProgramData%\...\queue\` | precisa sobreviver a reboot; volume é dezenas de jobs, não milhares — `File.Move` atômico no NTFS supre a durabilidade sem o custo de um banco embutido (ver §7.1) |
 | Instalador | WiX v5 → `.msi` | `ServiceInstall`/`ServiceControl` nativos |
 
 Pacotes NuGet principais:
@@ -118,7 +130,6 @@ Pacotes NuGet principais:
 Microsoft.Extensions.Hosting
 Microsoft.Extensions.Hosting.WindowsServices
 Microsoft.Extensions.Http.Resilience     # retry/backoff nas chamadas HTTP
-Microsoft.Data.Sqlite
 System.Security.Cryptography.ProtectedData   # DPAPI para o token
 System.Text.Encoding.CodePages           # CP850/CP860 (ver §5.2)
 Serilog.Extensions.Hosting + Serilog.Sinks.File
@@ -457,12 +468,14 @@ precisa tratar conflito.
 
 Falhas intermediárias **não** viram ack — viram `POST /status` e retry
 local. `status: failed` significa "desisti depois de esgotar o retry local"
-(padrão: 5 tentativas ao longo de ~10 min), e leva `errorCode` do
-vocabulário fechado do contrato.
+(padrão: 5 tentativas ao longo de ~10 min): o arquivo sai de `pending/` e
+vai para `failed/` (§7.1), e a chamada leva `errorCode` do vocabulário
+fechado do contrato.
 
-Se o backend estiver fora do ar na hora do ack: guardar o ack na fila local
-e reenviar. O job continua aparecendo em `jobs/pending` até o ack chegar, e
-a deduplicação local impede impressão dobrada.
+Se o backend estiver fora do ar na hora do ack: o arquivo em `printed/`
+fica com `acked: false` e o `AckFlusher` reenvia sozinho. O job continua
+aparecendo em `jobs/pending` até o ack chegar, e a checagem em `printed/`
+(§7.1) impede impressão dobrada.
 
 ### 6.6 Tratamento de HTTP
 
@@ -481,40 +494,99 @@ Ramificar sempre por `code` do `ApiError`, nunca pelo texto de `message` —
 
 ## 7. Estado local
 
-### 7.1 SQLite — `%ProgramData%\DiskPrato\PrintAgent\agent.db`
+### 7.1 Fila em arquivo — `%ProgramData%\DiskPrato\PrintAgent\queue\`
 
-```sql
-CREATE TABLE jobs (
-  job_id        TEXT PRIMARY KEY,
-  payload_json  TEXT NOT NULL,
-  received_at   TEXT NOT NULL,
-  attempts      INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at TEXT NOT NULL,
-  last_error    TEXT
-);
+SQLite foi cogitado e descartado. Não é a complexidade de operar um banco
+que pesa — é que ele resolve um problema de concorrência que este processo
+não tem (só o `Worker` escreve; o Tray só lê, via named pipe) e cobra em
+troca um raio de estrago maior: banco corrompido perde a fila inteira,
+arquivo corrompido perde um job. Com dezenas de jobs pendentes no pior caso,
+não milhares, a estrutura certa é a mais simples que sobrevive a reboot —
+um arquivo por job, com escrita atômica.
 
--- Dedup: sobrevive ao job sair da fila. Sem isto, o mesmo pedido reimprime
--- toda vez que jobs/pending o devolve antes do ack chegar.
-CREATE TABLE printed (
-  job_id     TEXT PRIMARY KEY,
-  printed_at TEXT NOT NULL,
-  acked      INTEGER NOT NULL DEFAULT 0
-);
-
--- Acks pendentes de envio (backend fora do ar no momento da impressão).
-CREATE TABLE pending_acks (
-  job_id     TEXT PRIMARY KEY,
-  body_json  TEXT NOT NULL,
-  attempts   INTEGER NOT NULL DEFAULT 0
-);
+```
+queue/
+  pending/    <jobId>.json     -- recebido, ainda não impresso (ou em retry)
+  printed/    <jobId>.json     -- impresso; carrega o próprio estado de ack
+  failed/     <jobId>.json     -- retry local esgotado (5 tentativas, ~10min)
 ```
 
-`printed` é limpo após 7 dias — janela folgada sobre as 24h que
-`jobs/pending` cobre.
+O nome do arquivo é sempre `<jobId>.json` — dedup vira `File.Exists`, O(1),
+sem índice.
 
-Ordem obrigatória de gravação ao receber um job: **commit em `jobs` antes de
-responder qualquer coisa**. Se o processo morrer entre receber e persistir,
-`jobs/pending` recupera; mas se `lastEventId` já tiver avançado, não.
+**`pending/<jobId>.json`** — equivalente à antiga tabela `jobs`:
+
+```json
+{
+  "jobId": "job_9f2a...",
+  "payload": { /* PrintJob completo, do jeito que chegou */ },
+  "receivedAt": "2026-08-08T19:42:00-03:00",
+  "attempts": 2,
+  "nextAttemptAt": "2026-08-08T19:42:15-03:00",
+  "lastError": "printer_busy"
+}
+```
+
+**`printed/<jobId>.json`** — equivalente às antigas `printed` +
+`pending_acks` fundidas num arquivo só, porque as duas descreviam o mesmo
+job em momentos diferentes do mesmo ciclo de vida:
+
+```json
+{
+  "jobId": "job_9f2a...",
+  "printedAt": "2026-08-08T19:42:16-03:00",
+  "acked": false,
+  "lastAckAttemptAt": "2026-08-08T19:42:20-03:00",
+  "lastAckError": "network"
+}
+```
+
+`acked: false` é o que faz o `AckFlusher` (§0) considerar o arquivo
+pendente de reenvio — sem tabela `pending_acks` separada, é o mesmo arquivo
+que muda de estado.
+
+**Escrita sempre atômica.** Toda gravação, seja criar ou atualizar, segue:
+
+```csharp
+var tmp = Path.Combine(dir, $"{jobId}.json.tmp-{Guid.NewGuid():N}");
+await File.WriteAllTextAsync(tmp, json, ct);
+File.Move(tmp, Path.Combine(dir, $"{jobId}.json"), overwrite: true);
+```
+
+`File.Move` no mesmo volume NTFS é atômico — nunca existe um estado em que
+o arquivo final está pela metade. Nome de `.tmp` único por escrita evita
+colisão se duas gravações se sobrepuserem por engano.
+
+**Transição de estado é mover entre pastas**, não editar um campo:
+`pending/<jobId>.json` some e `printed/<jobId>.json` aparece na mesma
+operação lógica (grava em `printed/`, depois apaga de `pending/` — nessa
+ordem, para nunca haver uma janela em que o job não existe em lugar
+nenhum). Falha de energia no meio deixa o job em `printed/`, o que é seguro:
+na pior hipótese ele é reportado impresso de novo ao backend, que já trata
+ack duplicado como idempotente (§6.5).
+
+**Dedup na recepção:** antes de enfileirar um job recém-chegado, checar
+`File.Exists` em `printed/` **e** em `failed/` — um job que já foi impresso
+ou já falhou definitivamente não deve reentrar em `pending/` só porque
+`jobs/pending` o devolveu de novo antes do ack chegar ao servidor. Essa
+checagem substitui o que a antiga tabela `printed` garantia.
+
+**Ordem de processamento:** a fila é montada em memória no boot lendo todo
+`pending/*.json` e ordenando pelo campo `receivedAt` do conteúdo — nunca
+pela ordem de listagem do diretório (não é garantida) nem pelo timestamp do
+arquivo no filesystem (antivírus e backup podem alterá-lo). Como o volume é
+pequeno, ler todos os arquivos no boot é barato.
+
+**Limpeza:** um timer horário remove de `printed/` e `failed/` tudo com mais
+de 7 dias — a mesma janela que a tabela `printed` usava, folgada sobre as
+24h que `jobs/pending` cobre. `pending/` nunca é limpo por idade: um job ali
+significa trabalho em aberto, e só sai por sucesso (vira `printed/`) ou por
+esgotar retry (vira `failed/`).
+
+Ordem obrigatória de gravação ao receber um job: **escrever em `pending/`
+antes de responder qualquer coisa**. Se o processo morrer entre receber e
+persistir, `jobs/pending` recupera; mas se `lastEventId` já tiver avançado,
+não.
 
 ### 7.2 Token — `%ProgramData%\DiskPrato\PrintAgent\device.dat`
 
@@ -614,8 +686,8 @@ Cliente HTTP da API, pareamento, cliente SSE com backoff + watchdog,
 
 ### Fase 4 — `PrintAgent.Host`
 
-Worker Service ligando tudo: SQLite, dedup, fila de retry, acks pendentes,
-named pipe.
+Worker Service ligando tudo: fila local em arquivo (`queue/`, §7.1), dedup,
+fila de retry, acks pendentes, named pipe.
 
 **Aceite:** rodando contra a API real do DiskPrato em dev, um pedido feito
 no cardápio sai impresso (porta `FILE:`) e aparece como `printed` no
