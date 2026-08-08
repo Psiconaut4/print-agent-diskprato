@@ -10,6 +10,61 @@ descreve como o agente o consome. Quando os dois divergirem, o OpenAPI vence.
 
 ---
 
+## 0. Status atual (atualizado em 2026-08-08)
+
+Progresso frente às fases descritas em §8. Cada commit corresponde a um
+bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
+(0 avisos, 0 erros, 44 testes) a cada etapa concluída.
+
+| Fase | Projeto | Status |
+|---|---|---|
+| 0 — bootstrap | solution, CI | ✅ feito (`feat(scaffold)`) |
+| 1 — Contracts | `PrintAgent.Contracts` | ✅ feito (`feat(contracts)`, `fix(contracts)`) |
+| 2 — ESC/POS | `PrintAgent.Core` (`EscPosFormatter`) | ✅ feito (`feat(core)`) |
+| 2/5 — transportes | `PrintAgent.Printing` (Spooler + Network) | ✅ feito (`feat(printing)`) |
+| 3 — API do backend | `PrintAgent.Transport` (HTTP + SSE) | ✅ feito (`feat(transport)`) |
+| 4 — Worker Service | `PrintAgent.Host` | ⏳ não iniciado |
+| 6 — tray/setup | `PrintAgent.Tray` | ⏳ não iniciado |
+| 7 — instalador | WiX | ⏳ não iniciado |
+| 8 — endurecimento | Serilog, diagnóstico | ⏳ não iniciado |
+
+**O que foi decidido/ajustado em relação ao texto original do plano:**
+- A divisão real entre `Core` e `Printing` segue a árvore de `tests/` do
+  §3 (que já estava certa), não a frase solta de `PrintAgent.Core/` em §3
+  que mencionava "formatação ESC/POS" — o formatador (`EscPosFormatter`)
+  é puro e mora em `PrintAgent.Core`; `PrintAgent.Printing` só transporta
+  `byte[]` já formatado até a impressora (Spooler/Network), sem saber nada
+  de `PrintJob`.
+- Corrigido um bug real do codegen do NSwag: o `JsonStringEnumConverter`
+  padrão ignora o `[EnumMember]` gerado e serializava enums pelo nome do
+  membro C# (`"Cash"` em vez de `"cash"`), o que quebraria toda escrita
+  para a API real. Ver `patch-enum-handling.ps1` e
+  `TolerantEnumConverterFactory` em `PrintAgent.Contracts`.
+- Propriedades opcionais de tipo valor (`ApiError.Code`,
+  `AckRequest.PrintedAt`) agora geram como nuláveis
+  (`/GenerateOptionalPropertiesAsNullable:true`) — sem isso, um campo
+  ausente no JSON virava silenciosamente o membro `0` do enum ou
+  `0001-01-01`, em vez de `null`.
+- `PrintOrder.Timezone` é opcional no schema (não está na lista
+  `required`). Quando ausente, `EscPosFormatter` usa o offset já embutido
+  no `DateTimeOffset` em vez de cair no fuso da máquina — nunca o
+  comportamento que o plano §5.4 proíbe.
+
+**Pendência manual (não automatizável por um agente):** o teste de
+convivência do plano §8 Fase 2 exige uma fila de impressão Windows real
+apontada para a porta `FILE:` (impressora "Generic / Text Only"),
+provisionada manualmente numa máquina com sessão desktop. `SpoolerPrinterTransport`
+está implementado conforme a spec e tem o caminho de erro coberto por
+teste automatizado, mas o golden-bytes test e o teste de "PDV fake
+concorrente" contra impressora real ficam para verificação manual depois.
+
+**Próximo passo:** Fase 4 (`PrintAgent.Host`) — Worker Service que une
+`Transport` + `Printing` + `Core`, SQLite (`jobs`/`printed`/`pending_acks`,
+§7.1), dedup por `jobId`, e o servidor do named pipe (§7.4) que o Tray vai
+consumir na Fase 6.
+
+---
+
 ## 1. O que o agente é
 
 Um serviço do Windows que fica na máquina do balcão, mantém uma conexão com
