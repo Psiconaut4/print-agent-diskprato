@@ -14,7 +14,7 @@ descreve como o agente o consome. Quando os dois divergirem, o OpenAPI vence.
 
 Progresso frente às fases descritas em §8. Cada commit corresponde a um
 bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
-(0 avisos, 0 erros, 44 testes) a cada etapa concluída.
+(0 avisos, 0 erros, 84 testes) a cada etapa concluída.
 
 | Fase | Projeto | Status |
 |---|---|---|
@@ -23,7 +23,7 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
 | 2 — ESC/POS | `PrintAgent.Core` (`EscPosFormatter`) | ✅ feito (`feat(core)`) |
 | 2/5 — transportes | `PrintAgent.Printing` (Spooler + Network) | ✅ feito (`feat(printing)`) |
 | 3 — API do backend | `PrintAgent.Transport` (HTTP + SSE) | ✅ feito (`feat(transport)`) |
-| 4 — Worker Service | `PrintAgent.Host` | ⏳ não iniciado |
+| 4 — Worker Service | `PrintAgent.Host` | ✅ feito (`feat(host)`) |
 | 6 — tray/setup | `PrintAgent.Tray` | ⏳ não iniciado |
 | 7 — instalador | WiX | ⏳ não iniciado |
 | 8 — endurecimento | Serilog, diagnóstico | ⏳ não iniciado |
@@ -49,19 +49,36 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
   `required`). Quando ausente, `EscPosFormatter` usa o offset já embutido
   no `DateTimeOffset` em vez de cair no fuso da máquina — nunca o
   comportamento que o plano §5.4 proíbe.
+- `PrintOrchestrator` (Fase 4) nunca fala com a API diretamente, nem para
+  mandar ack: grava em `pending_acks` (síncrono, sem rede) e devolve. Quem
+  efetivamente tenta enviar pela rede é o `AckFlusher`, num loop separado.
+  Motivo: `JobsApiClient.AckJobAsync` já re-tenta indefinidamente para
+  5xx/rede (por design, §6.6) — se essa espera acontecesse dentro do
+  caminho de impressão, um backend fora do ar travaria a impressão de
+  pedidos novos também. `AckFlusher` limita cada tentativa a um timeout
+  curto e deixa o resto pra próxima rodada.
+- Named pipe (`AgentController`/`NamedPipeIpcServer`, §7.4) implementado já
+  na Fase 4, adiantado — o Tray (Fase 6) ainda não existe, mas o protocolo
+  (`get-status`/`pair`/`unpair`/`set-printer`/`test-print`, JSON por linha)
+  já está pronto para ele consumir.
 
-**Pendência manual (não automatizável por um agente):** o teste de
-convivência do plano §8 Fase 2 exige uma fila de impressão Windows real
-apontada para a porta `FILE:` (impressora "Generic / Text Only"),
-provisionada manualmente numa máquina com sessão desktop. `SpoolerPrinterTransport`
-está implementado conforme a spec e tem o caminho de erro coberto por
-teste automatizado, mas o golden-bytes test e o teste de "PDV fake
-concorrente" contra impressora real ficam para verificação manual depois.
+**Pendências manuais (não automatizáveis por um agente):**
+- O teste de convivência do plano §8 Fase 2 exige uma fila de impressão
+  Windows real apontada para a porta `FILE:` (impressora "Generic / Text
+  Only"), provisionada manualmente numa máquina com sessão desktop.
+  `SpoolerPrinterTransport` está implementado conforme a spec e tem o
+  caminho de erro coberto por teste automatizado, mas o golden-bytes test e
+  o teste de "PDV fake concorrente" contra impressora real ficam para
+  depois.
+- O loop principal do `Worker` e o servidor do named pipe (Fase 4) não têm
+  teste automatizado — são integração pura (SSE + HTTP + IPC reais contra
+  backend de verdade). `JobStore` e `PrintOrchestrator`, que concentram a
+  lógica de decisão, estão cobertos por teste contra SQLite real e um
+  `IPrinterTransport` fake.
 
-**Próximo passo:** Fase 4 (`PrintAgent.Host`) — Worker Service que une
-`Transport` + `Printing` + `Core`, SQLite (`jobs`/`printed`/`pending_acks`,
-§7.1), dedup por `jobId`, e o servidor do named pipe (§7.4) que o Tray vai
-consumir na Fase 6.
+**Próximo passo:** Fase 6 (`PrintAgent.Tray`) — tray icon + tela de setup
+(WinForms) consumindo o named pipe já pronto: pareamento, escolha de fila
+ou IP:porta, papel/code page, teste de impressão, log recente.
 
 ---
 
