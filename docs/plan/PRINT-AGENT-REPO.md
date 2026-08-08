@@ -14,7 +14,7 @@ descreve como o agente o consome. Quando os dois divergirem, o OpenAPI vence.
 
 Progresso frente às fases descritas em §8. Cada commit corresponde a um
 bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
-(0 avisos, 0 erros, 84 testes) a cada etapa concluída.
+(0 avisos, 0 erros) a cada etapa concluída.
 
 | Fase | Projeto | Status |
 |---|---|---|
@@ -23,8 +23,8 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
 | 2 — ESC/POS | `PrintAgent.Core` (`EscPosFormatter`) | ✅ feito (`feat(core)`) |
 | 2/5 — transportes | `PrintAgent.Printing` (Spooler + Network) | ✅ feito (`feat(printing)`) |
 | 3 — API do backend | `PrintAgent.Transport` (HTTP + SSE) | ✅ feito (`feat(transport)`) |
-| 4 — Worker Service | `PrintAgent.Host` | ✅ feito (`feat(host)`) |
-| 6 — tray/setup | `PrintAgent.Tray` | ⏳ não iniciado |
+| 4 — Worker Service | `PrintAgent.Host` | ✅ feito (`feat(host)`) — fila local em arquivo desde o refactor de 2026-08-08 |
+| 6 — tray/setup | `PrintAgent.Tray` | ✅ feito (`feat(tray)`) — pendente validação manual (ver abaixo) |
 | 7 — instalador | WiX | ⏳ não iniciado |
 | 8 — endurecimento | Serilog, diagnóstico | ⏳ não iniciado |
 
@@ -69,10 +69,35 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
   no máximo) não justifica um banco relacional embutido. Motivos:
   arquivo corrompido perde um job; banco corrompido perde a fila inteira.
   E o suporte consegue abrir a pasta pelo Explorer sem instalar ferramenta
-  nenhuma. `JobStore` foi reescrito sobre `queue/pending/` e
-  `queue/printed/` (§7.1); `Microsoft.Data.Sqlite` saiu do projeto e do
+  nenhuma. `JobStore` foi reescrito sobre `queue/pending/`, `queue/printed/`
+  e `queue/failed/` (§7.1); `Microsoft.Data.Sqlite` saiu do projeto e do
   instalador. `PrintOrchestrator` e `AckFlusher` não mudaram de
-  responsabilidade, só a implementação de `IJobStore` por baixo.
+  responsabilidade, só a implementação de `JobStore` por baixo. A tabela
+  `pending_acks` também saiu: o estado de ack (`acked`/`lastAckAttemptAt`/
+  `lastAckError`) agora mora dentro do próprio arquivo `printed/<jobId>.json`
+  ou `failed/<jobId>.json` — os dois esquemas também ganharam `attempts` (e
+  `failed/` ganhou `errorCode`/`errorMessage`) para o `AckFlusher` conseguir
+  remontar o `AckRequest` sem um blob de ack separado.
+- **Fase 6 (`PrintAgent.Tray`) feita em 2026-08-08.** `ApplicationContext`
+  com `NotifyIcon` (sem janela principal — ícone gerado em memória, sem
+  arquivo `.ico`) e uma `SetupForm` em WinForms puro (sem designer
+  serializado) consumindo o named pipe pelo protocolo já existente. Tray
+  não referencia `PrintAgent.Host`: os dois falam só pelo JSON do pipe,
+  com DTOs espelhados no lado do Tray (`Ipc/IpcContracts.cs`) — Tray e
+  serviço continuam deployables/processos independentes de propósito
+  (Session 0 isolation). Duas extensões pequenas no protocolo do pipe para
+  a tela de setup funcionar de verdade:
+  - Novo comando `get-config`, devolve o `PrinterConfig` atual (nenhum
+    outro comando expunha isso) — necessário pra tela pré-preencher os
+    campos ao abrir, em vez de sempre partir de valores em branco.
+  - `AgentStatusSnapshot` ganhou `PrinterStatus` (texto:
+    `Ready`/`Offline`/`PaperOut`/`CoverOpen`/`Unknown`), lido via
+    `IPrinterStatusQuery.QueryStatusAsync` com teto de 2s em
+    `AgentController.GetStatusAsync` — separado do `StatusReport` que o
+    `Worker` manda pro backend (esse continua com o TODO da Fase 8 em
+    aberto, §6 não mudou). É só o que faz o ícone da bandeja/tela de setup
+    mostrarem "impressora ok" de verdade, e nunca inventa "pronta" sem
+    saber (§5.3).
 
 **Pendências manuais (não automatizáveis por um agente):**
 - O teste de convivência do plano §8 Fase 2 exige uma fila de impressão
@@ -87,10 +112,15 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
   backend de verdade). `JobStore` e `PrintOrchestrator`, que concentram a
   lógica de decisão, estão cobertos por teste contra um diretório temporário
   real (sem mock de filesystem) e um `IPrinterTransport` fake.
+- `PrintAgent.Tray` (Fase 6) não tem teste automatizado — é UI WinForms
+  falando com um processo real pelo named pipe, o critério de aceite da
+  Fase 6 (§8) é manual por natureza: "instalação limpa vai de zero a cupom
+  de teste impresso sem abrir terminal nem editar arquivo". Validação
+  pendente antes de embalar a Fase 7.
 
-**Próximo passo:** Fase 6 (`PrintAgent.Tray`) — tray icon + tela de setup
-(WinForms) consumindo o named pipe já pronto: pareamento, escolha de fila
-ou IP:porta, papel/code page, teste de impressão, log recente.
+**Próximo passo:** Fase 7 (instalador WiX) — depois da validação manual do
+Tray. `ServiceInstall`/`ServiceControl` do serviço, tray no startup do
+usuário, ACL do `%ProgramData%`, desinstalação limpa.
 
 ---
 

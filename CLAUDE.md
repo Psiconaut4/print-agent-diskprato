@@ -20,8 +20,8 @@ src/
   PrintAgent.Printing/    IPrinterTransport: SpoolerPrinterTransport (RAW/winspool), NetworkPrinterTransport (IP:9100)
   PrintAgent.Transport/   Cliente HTTP + SSE da API do DiskPrato, pareamento
   PrintAgent.Host/        Worker Service: fila local em arquivo, PrintOrchestrator, AckFlusher, named pipe IPC
-  PrintAgent.Tray/        Tray icon + tela de setup (WinForms) — não iniciado
-tests/                    um projeto de teste por projeto de src/ acima
+  PrintAgent.Tray/        Tray icon + tela de setup (WinForms) — fala com Host só pelo JSON do named pipe, sem referenciar o projeto Host
+tests/                    um projeto de teste por projeto de src/ acima (PrintAgent.Tray não tem — é UI, validação manual)
 installer/                WiX — vazio, não iniciado
 ```
 
@@ -36,10 +36,12 @@ dotnet test       # todos os projetos de teste, sem mocks de filesystem/HTTP —
 
 ## Estado atual (2026-08-08)
 
-Fases 0–4 completas (scaffold, Contracts, EscPosFormatter, transportes de
-impressão, cliente HTTP/SSE, Worker Service). Fases 5–8 (network transport
-como caminho separado testado, Tray, instalador, endurecimento) não
-iniciadas — ver tabela em `docs/plan/PRINT-AGENT-REPO.md §0`.
+Fases 0–4 e 6 completas (scaffold, Contracts, EscPosFormatter, transportes
+de impressão, cliente HTTP/SSE, Worker Service, Tray/setup). Fases 5 (network
+transport como caminho separado testado contra hardware/servidor fake), 7
+(instalador) e 8 (endurecimento) não iniciadas — ver tabela em
+`docs/plan/PRINT-AGENT-REPO.md §0`. Tray ainda não passou por validação
+manual (próximo passo antes da Fase 7).
 
 **Fila local:** arquivo, não banco. `%ProgramData%\DiskPrato\PrintAgent\queue\`
 com `pending/`, `printed/`, `failed/` — um `.json` por job, escrita atômica
