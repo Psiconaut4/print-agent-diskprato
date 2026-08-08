@@ -80,9 +80,9 @@ public class PrintJobRoundTripTests
         Assert.Equal("Cantina do Zé", job.Restaurant.Name);
         Assert.Equal(PrintOrderFulfillmentType.Delivery, job.Order.FulfillmentType);
         Assert.Equal(2, job.Order.Items.Count);
-        Assert.Equal(300, job.Order.Items.ElementAt(0).Modifiers.ElementAt(0).PriceCents);
-        Assert.Null(job.Order.Items.ElementAt(0).Modifiers.ElementAt(1).PriceCents);
-        Assert.Equal(2, job.Order.Items.ElementAt(1).ComboItems.Count);
+        Assert.Equal(300, job.Order.Items.ElementAt(0).Modifiers!.ElementAt(0).PriceCents);
+        Assert.Null(job.Order.Items.ElementAt(0).Modifiers!.ElementAt(1).PriceCents);
+        Assert.Equal(2, job.Order.Items.ElementAt(1).ComboItems!.Count);
         Assert.Equal(4300, job.Order.Payment.ChangeDueCents);
     }
 
