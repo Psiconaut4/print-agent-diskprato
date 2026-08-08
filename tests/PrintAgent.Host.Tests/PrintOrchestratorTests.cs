@@ -9,24 +9,18 @@ namespace PrintAgent.Host.Tests;
 
 public class PrintOrchestratorTests : IDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"printagent-test-{Guid.NewGuid():N}.db");
+    private readonly string _queueDir = Path.Combine(Path.GetTempPath(), $"printagent-test-{Guid.NewGuid():N}");
     private readonly JobStore _store;
     private readonly FakeTimeProvider _timeProvider = new(DateTimeOffset.UtcNow);
     private readonly PrintOrchestrator _orchestrator;
 
     public PrintOrchestratorTests()
     {
-        _store = new JobStore(_dbPath);
+        _store = new JobStore(_queueDir);
         _orchestrator = new PrintOrchestrator(_store, new EscPosFormatter(), _timeProvider);
     }
 
-    public void Dispose()
-    {
-        _store.Dispose();
-        File.Delete(_dbPath);
-        File.Delete(_dbPath + "-wal");
-        File.Delete(_dbPath + "-shm");
-    }
+    public void Dispose() => Directory.Delete(_queueDir, recursive: true);
 
     private static PrintJob BuildJob(string jobId = "job1") => new()
     {
@@ -72,9 +66,10 @@ public class PrintOrchestratorTests : IDisposable
         var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), PrinterProfile.Default, transport, CancellationToken.None);
 
         Assert.Equal(PrintOutcome.Printed, outcome);
-        Assert.True(_store.IsAlreadyPrinted("job1"));
-        var ack = Assert.Single(_store.GetPendingAcks());
-        Assert.Contains("\"printed\"", ack.BodyJson);
+        Assert.True(_store.IsAlreadyHandled("job1"));
+        var printed = Assert.Single(_store.GetUnacknowledgedPrinted());
+        Assert.Equal("job1", printed.JobId);
+        Assert.Equal(1, printed.Attempts);
     }
 
     [Fact]
@@ -97,7 +92,7 @@ public class PrintOrchestratorTests : IDisposable
         var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), PrinterProfile.Default, transport, CancellationToken.None);
 
         Assert.Equal(PrintOutcome.Queued, outcome);
-        Assert.False(_store.IsAlreadyPrinted("job1"));
+        Assert.False(_store.IsAlreadyHandled("job1"));
         Assert.Empty(_store.GetDueJobs(_timeProvider.GetUtcNow()));
         Assert.Single(_store.GetDueJobs(_timeProvider.GetUtcNow() + LocalPrintRetryPolicy.NextDelay(1)));
     }
@@ -120,8 +115,8 @@ public class PrintOrchestratorTests : IDisposable
         Assert.Equal(LocalPrintRetryPolicy.MaxAttempts, transport.CallCount);
         Assert.Empty(_store.GetDueJobs(DateTimeOffset.UtcNow.AddDays(1)));
 
-        var ack = Assert.Single(_store.GetPendingAcks());
-        Assert.Contains("\"failed\"", ack.BodyJson);
-        Assert.Contains("out_of_paper", ack.BodyJson);
+        var failed = Assert.Single(_store.GetUnacknowledgedFailed());
+        Assert.Equal("job1", failed.JobId);
+        Assert.Equal("Out_of_paper", failed.ErrorCode);
     }
 }

@@ -1,259 +1,245 @@
-using System.Globalization;
-using Microsoft.Data.Sqlite;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PrintAgent.Host.Storage;
 
 /// <summary>
-/// Fila local em SQLite (plano §7.1) —
-/// <c>%ProgramData%\DiskPrato\PrintAgent\agent.db</c>. Sobrevive a reboot da
+/// Fila local em arquivo (plano §7.1) —
+/// <c>%ProgramData%\DiskPrato\PrintAgent\queue\</c>, um <c>.json</c> por job em
+/// <c>pending/</c>, <c>printed/</c> ou <c>failed/</c>. Sobrevive a reboot da
 /// máquina da loja, o que o replay do SSE (TTL de 5 min) não cobre.
 ///
-/// Uma única conexão persistente em modo WAL: processo único, único
-/// escritor, sem motivo para abrir/fechar conexão a cada chamada. As
-/// operações são deliberadamente síncronas — são leituras/escritas locais em
-/// um arquivo pequeno, não vale a pena a complexidade de uma API assíncrona
-/// só por convenção.
+/// Estado é a pasta em que o arquivo está, não um campo dentro dele — a
+/// transição entre estados é gravar no destino e só depois apagar da origem,
+/// nessa ordem, para nunca existir uma janela em que o job não existe em
+/// lugar nenhum. Escrita sempre atômica (arquivo temporário + <see cref="File.Move"/>
+/// no mesmo volume).
 /// </summary>
-public sealed class JobStore : IDisposable
+public sealed class JobStore
 {
-    private readonly SqliteConnection _connection;
-
-    public JobStore(string? path = null)
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        var dbPath = path ?? Path.Combine(Config.AgentConfigStore.DefaultDirectory, "agent.db");
-        var directory = Path.GetDirectoryName(dbPath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
 
-        _connection = new SqliteConnection($"Data Source={dbPath}");
-        _connection.Open();
+    private readonly string _pendingDir;
+    private readonly string _printedDir;
+    private readonly string _failedDir;
 
-        Execute("PRAGMA journal_mode=WAL;");
-        Execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
-              job_id          TEXT PRIMARY KEY,
-              payload_json    TEXT NOT NULL,
-              received_at     TEXT NOT NULL,
-              attempts        INTEGER NOT NULL DEFAULT 0,
-              next_attempt_at TEXT NOT NULL,
-              last_error      TEXT
-            );
-            """);
-        Execute("""
-            CREATE TABLE IF NOT EXISTS printed (
-              job_id     TEXT PRIMARY KEY,
-              printed_at TEXT NOT NULL,
-              acked      INTEGER NOT NULL DEFAULT 0
-            );
-            """);
-        Execute("""
-            CREATE TABLE IF NOT EXISTS pending_acks (
-              job_id     TEXT PRIMARY KEY,
-              body_json  TEXT NOT NULL,
-              attempts   INTEGER NOT NULL DEFAULT 0
-            );
-            """);
+    public JobStore(string? queueDirectory = null)
+    {
+        var root = queueDirectory ?? Path.Combine(Config.AgentConfigStore.DefaultDirectory, "queue");
+        _pendingDir = Path.Combine(root, "pending");
+        _printedDir = Path.Combine(root, "printed");
+        _failedDir = Path.Combine(root, "failed");
+
+        Directory.CreateDirectory(_pendingDir);
+        Directory.CreateDirectory(_printedDir);
+        Directory.CreateDirectory(_failedDir);
     }
 
     /// <summary>
-    /// Já foi impresso (independente de já ter sido confirmado por ack). O
-    /// mesmo job chega pelo stream e por <c>jobs/pending</c> — este é o
-    /// ponto de dedup (plano §6.2/§7.1), não é otimização, é correção.
+    /// Já chegou a um estado terminal (impresso ou falhou em definitivo). O
+    /// mesmo job chega pelo stream e por <c>jobs/pending</c> — este é o ponto
+    /// de dedup (plano §6.2/§7.1), não é otimização, é correção. Cobre os
+    /// dois estados terminais: um job que já falhou definitivamente também
+    /// não deve reentrar em <c>pending/</c>.
     /// </summary>
-    public bool IsAlreadyPrinted(string jobId)
-    {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM printed WHERE job_id = $jobId LIMIT 1;";
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        return cmd.ExecuteScalar() is not null;
-    }
+    public bool IsAlreadyHandled(string jobId) => File.Exists(PrintedPath(jobId)) || File.Exists(FailedPath(jobId));
 
     /// <summary>
-    /// Grava o job recebido antes de qualquer outra coisa (plano §7.1: "commit
-    /// em jobs antes de responder qualquer coisa"). Idempotente — reenvio do
-    /// mesmo jobId não duplica nem reseta tentativas já feitas.
+    /// Grava o job recebido antes de qualquer outra coisa (plano §7.1: "escrever
+    /// em pending/ antes de responder qualquer coisa"). Idempotente — reenvio
+    /// do mesmo jobId não duplica nem reseta tentativas já feitas.
     /// </summary>
     public void RecordReceived(string jobId, string payloadJson, DateTimeOffset receivedAt)
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO jobs (job_id, payload_json, received_at, attempts, next_attempt_at, last_error)
-            VALUES ($jobId, $payload, $receivedAt, 0, $receivedAt, NULL)
-            ON CONFLICT(job_id) DO NOTHING;
-            """;
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        cmd.Parameters.AddWithValue("$payload", payloadJson);
-        cmd.Parameters.AddWithValue("$receivedAt", Format(receivedAt));
-        cmd.ExecuteNonQuery();
-    }
-
-    public void RemoveFromQueue(string jobId)
-    {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM jobs WHERE job_id = $jobId;";
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        cmd.ExecuteNonQuery();
-    }
-
-    /// <summary>Marca como impresso e tira da fila de retry — as duas coisas na mesma transação.</summary>
-    public void RecordPrinted(string jobId, DateTimeOffset printedAt)
-    {
-        using var transaction = _connection.BeginTransaction();
-
-        using (var insert = _connection.CreateCommand())
+        if (File.Exists(PendingPath(jobId)))
         {
-            insert.Transaction = transaction;
-            insert.CommandText = """
-                INSERT INTO printed (job_id, printed_at, acked) VALUES ($jobId, $printedAt, 0)
-                ON CONFLICT(job_id) DO UPDATE SET printed_at = excluded.printed_at;
-                """;
-            insert.Parameters.AddWithValue("$jobId", jobId);
-            insert.Parameters.AddWithValue("$printedAt", Format(printedAt));
-            insert.ExecuteNonQuery();
+            return;
         }
 
-        using (var delete = _connection.CreateCommand())
-        {
-            delete.Transaction = transaction;
-            delete.CommandText = "DELETE FROM jobs WHERE job_id = $jobId;";
-            delete.Parameters.AddWithValue("$jobId", jobId);
-            delete.ExecuteNonQuery();
-        }
-
-        transaction.Commit();
+        var record = new PendingJobRecord(jobId, payloadJson, receivedAt, Attempts: 0, NextAttemptAt: receivedAt, LastError: null);
+        WriteAtomic(PendingPath(jobId), record);
     }
 
-    public void MarkAcked(string jobId)
+    public void RemoveFromQueue(string jobId) => TryDelete(PendingPath(jobId));
+
+    /// <summary>Marca como impresso e tira da fila de retry — grava em <c>printed/</c> antes de apagar de <c>pending/</c>.</summary>
+    public void RecordPrinted(string jobId, DateTimeOffset printedAt, int attempts)
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "UPDATE printed SET acked = 1 WHERE job_id = $jobId;";
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        cmd.ExecuteNonQuery();
+        var record = new PrintedJobRecord(jobId, printedAt, attempts, Acked: false, LastAckAttemptAt: null, LastAckError: null);
+        WriteAtomic(PrintedPath(jobId), record);
+        TryDelete(PendingPath(jobId));
+    }
+
+    /// <summary>Esgotou o retry local (plano §6.5) — grava em <c>failed/</c> antes de apagar de <c>pending/</c>.</summary>
+    public void RecordFailed(string jobId, int attempts, string? errorCode, string? errorMessage)
+    {
+        var record = new FailedJobRecord(
+            jobId, DateTimeOffset.UtcNow, attempts, errorCode, errorMessage, Acked: false, LastAckAttemptAt: null, LastAckError: null);
+        WriteAtomic(FailedPath(jobId), record);
+        TryDelete(PendingPath(jobId));
     }
 
     /// <summary>Registra uma tentativa de impressão que falhou e agenda a próxima (plano §6.5).</summary>
     public void RecordAttemptFailure(string jobId, string? error, DateTimeOffset nextAttemptAt)
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
-            UPDATE jobs
-            SET attempts = attempts + 1, next_attempt_at = $nextAttemptAt, last_error = $error
-            WHERE job_id = $jobId;
-            """;
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        cmd.Parameters.AddWithValue("$nextAttemptAt", Format(nextAttemptAt));
-        cmd.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
-        cmd.ExecuteNonQuery();
-    }
-
-    /// <summary>Jobs cujo próximo horário de tentativa já chegou, mais antigos primeiro.</summary>
-    public IReadOnlyList<QueuedJob> GetDueJobs(DateTimeOffset now)
-    {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT job_id, payload_json, received_at, attempts, last_error
-            FROM jobs
-            WHERE next_attempt_at <= $now
-            ORDER BY received_at ASC;
-            """;
-        cmd.Parameters.AddWithValue("$now", Format(now));
-
-        var result = new List<QueuedJob>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var current = ReadPending(jobId);
+        if (current is null)
         {
-            result.Add(new QueuedJob(
-                reader.GetString(0),
-                reader.GetString(1),
-                Parse(reader.GetString(2)),
-                reader.GetInt32(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4)));
+            return;
         }
 
-        return result;
+        var updated = current with { Attempts = current.Attempts + 1, NextAttemptAt = nextAttemptAt, LastError = error };
+        WriteAtomic(PendingPath(jobId), updated);
     }
+
+    /// <summary>Jobs cujo próximo horário de tentativa já chegou, mais antigos primeiro (por <c>receivedAt</c>, nunca pela ordem do diretório).</summary>
+    public IReadOnlyList<PendingJobRecord> GetDueJobs(DateTimeOffset now) =>
+        ReadAllPending()
+            .Where(job => job.NextAttemptAt <= now)
+            .OrderBy(job => job.ReceivedAt)
+            .ToList();
 
     /// <summary>Tamanho atual da fila de retry — vira <c>StatusReport.queuedJobs</c> (plano §6, best-effort).</summary>
-    public int GetQueueLength()
-    {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM jobs;";
-        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
-    }
+    public int GetQueueLength() => Directory.EnumerateFiles(_pendingDir, "*.json").Count();
 
-    public void EnqueuePendingAck(string jobId, string bodyJson)
-    {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO pending_acks (job_id, body_json, attempts) VALUES ($jobId, $body, 0)
-            ON CONFLICT(job_id) DO UPDATE SET body_json = excluded.body_json;
-            """;
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        cmd.Parameters.AddWithValue("$body", bodyJson);
-        cmd.ExecuteNonQuery();
-    }
+    /// <summary>Jobs impressos ainda não confirmados ao backend (plano §6.5, drenado pelo <c>AckFlusher</c>).</summary>
+    public IReadOnlyList<PrintedJobRecord> GetUnacknowledgedPrinted() =>
+        ReadAll<PrintedJobRecord>(_printedDir).Where(job => !job.Acked).ToList();
 
-    public IReadOnlyList<PendingAckRecord> GetPendingAcks()
-    {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT job_id, body_json, attempts FROM pending_acks;";
+    /// <summary>Jobs com retry local esgotado ainda não confirmados ao backend (plano §6.5, drenado pelo <c>AckFlusher</c>).</summary>
+    public IReadOnlyList<FailedJobRecord> GetUnacknowledgedFailed() =>
+        ReadAll<FailedJobRecord>(_failedDir).Where(job => !job.Acked).ToList();
 
-        var result = new List<PendingAckRecord>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+    public void MarkAcked(string jobId)
+    {
+        var printedPath = PrintedPath(jobId);
+        if (File.Exists(printedPath))
         {
-            result.Add(new PendingAckRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+            var printed = Read<PrintedJobRecord>(printedPath);
+            if (printed is not null)
+            {
+                WriteAtomic(printedPath, printed with { Acked = true });
+            }
+
+            return;
+        }
+
+        var failedPath = FailedPath(jobId);
+        var failed = Read<FailedJobRecord>(failedPath);
+        if (failed is not null)
+        {
+            WriteAtomic(failedPath, failed with { Acked = true });
+        }
+    }
+
+    /// <summary>Estourou o teto de tentativa do <c>AckFlusher</c> para este job — fica pendente pra próxima rodada.</summary>
+    public void RecordAckAttemptFailure(string jobId, string? error)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var printedPath = PrintedPath(jobId);
+        if (File.Exists(printedPath))
+        {
+            var printed = Read<PrintedJobRecord>(printedPath);
+            if (printed is not null)
+            {
+                WriteAtomic(printedPath, printed with { LastAckAttemptAt = now, LastAckError = error });
+            }
+
+            return;
+        }
+
+        var failedPath = FailedPath(jobId);
+        var failed = Read<FailedJobRecord>(failedPath);
+        if (failed is not null)
+        {
+            WriteAtomic(failedPath, failed with { LastAckAttemptAt = now, LastAckError = error });
+        }
+    }
+
+    /// <summary>Limpa <c>printed/</c> e <c>failed/</c> com mais de 7 dias — janela folgada sobre as 24h que <c>jobs/pending</c> cobre (plano §7.1). <c>pending/</c> nunca é limpo por idade.</summary>
+    public void CleanupOldPrinted(DateTimeOffset olderThan)
+    {
+        foreach (var printed in ReadAll<PrintedJobRecord>(_printedDir))
+        {
+            if (printed.PrintedAt < olderThan)
+            {
+                TryDelete(PrintedPath(printed.JobId));
+            }
+        }
+
+        foreach (var failed in ReadAll<FailedJobRecord>(_failedDir))
+        {
+            if (failed.FailedAt < olderThan)
+            {
+                TryDelete(FailedPath(failed.JobId));
+            }
+        }
+    }
+
+    private PendingJobRecord? ReadPending(string jobId) => Read<PendingJobRecord>(PendingPath(jobId));
+
+    private IReadOnlyList<PendingJobRecord> ReadAllPending() => ReadAll<PendingJobRecord>(_pendingDir);
+
+    private static IReadOnlyList<T> ReadAll<T>(string directory)
+    {
+        var result = new List<T>();
+        foreach (var path in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            var record = Read<T>(path);
+            if (record is not null)
+            {
+                result.Add(record);
+            }
         }
 
         return result;
     }
 
-    public void RemovePendingAck(string jobId)
+    private static T? Read<T>(string path)
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM pending_acks WHERE job_id = $jobId;";
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        cmd.ExecuteNonQuery();
+        if (!File.Exists(path))
+        {
+            return default;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            return JsonSerializer.Deserialize<T>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            // arquivo local corrompido: trata como ausente em vez de derrubar o processo.
+            return default;
+        }
     }
 
-    public void IncrementAckAttempt(string jobId)
+    private static void WriteAtomic<T>(string path, T record)
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "UPDATE pending_acks SET attempts = attempts + 1 WHERE job_id = $jobId;";
-        cmd.Parameters.AddWithValue("$jobId", jobId);
-        cmd.ExecuteNonQuery();
+        var directory = Path.GetDirectoryName(path)!;
+        var tmp = Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(path)}.json.tmp-{Guid.NewGuid():N}");
+        File.WriteAllText(tmp, JsonSerializer.Serialize(record, JsonOptions));
+        File.Move(tmp, path, overwrite: true);
     }
 
-    /// <summary>Limpa <c>printed</c> com mais de 7 dias — janela folgada sobre as 24h que <c>jobs/pending</c> cobre (plano §7.1).</summary>
-    public void CleanupOldPrinted(DateTimeOffset olderThan)
+    private static void TryDelete(string path)
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM printed WHERE printed_at < $cutoff;";
-        cmd.Parameters.AddWithValue("$cutoff", Format(olderThan));
-        cmd.ExecuteNonQuery();
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // best-effort: se outro processo segura o arquivo, tenta de novo na proxima rodada.
+        }
     }
 
-    private void Execute(string sql)
-    {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
-    }
+    private string PendingPath(string jobId) => Path.Combine(_pendingDir, $"{jobId}.json");
 
-    private static string Format(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
+    private string PrintedPath(string jobId) => Path.Combine(_printedDir, $"{jobId}.json");
 
-    private static DateTimeOffset Parse(string value) =>
-        DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
-
-    public void Dispose()
-    {
-        _connection.Dispose();
-
-        // Microsoft.Data.Sqlite faz pooling da conexao nativa por padrao: sem
-        // isto, o arquivo continua com handle aberto por um tempo depois do
-        // Dispose (percebido nos testes, que apagam o .db logo em seguida).
-        SqliteConnection.ClearPool(_connection);
-    }
+    private string FailedPath(string jobId) => Path.Combine(_failedDir, $"{jobId}.json");
 }

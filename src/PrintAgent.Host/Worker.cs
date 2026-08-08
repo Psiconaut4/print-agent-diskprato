@@ -73,7 +73,7 @@ public sealed class Worker(
 
         sse.JobCancelled += e =>
         {
-            if (!jobStore.IsAlreadyPrinted(e.JobId))
+            if (!jobStore.IsAlreadyHandled(e.JobId))
             {
                 jobStore.RemoveFromQueue(e.JobId);
                 logger.LogInformation("Job {JobId} cancelado antes de imprimir — removido da fila local.", e.JobId);

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PrintAgent.Contracts;
 using PrintAgent.Host.Storage;
@@ -7,15 +6,14 @@ using PrintAgent.Transport;
 namespace PrintAgent.Host;
 
 /// <summary>
-/// Drena <c>pending_acks</c> pela rede (plano §6.5). Roda separado do
-/// caminho de impressão para que um backend fora do ar nunca atrase a
-/// impressão de um pedido novo — só atrasa a confirmação dele, que o
-/// servidor já sabe tolerar (o job continua em <c>jobs/pending</c> até o ack
-/// chegar).
+/// Drena <c>printed/</c> e <c>failed/</c> ainda não confirmados pela rede
+/// (plano §6.5). Roda separado do caminho de impressão para que um backend
+/// fora do ar nunca atrase a impressão de um pedido novo — só atrasa a
+/// confirmação dele, que o servidor já sabe tolerar (o job continua em
+/// <c>jobs/pending</c> até o ack chegar).
 /// </summary>
 public sealed class AckFlusher(JobStore jobStore, JobsApiClient jobsApi, ILogger<AckFlusher> logger)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan DefaultPerAckTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
@@ -29,49 +27,71 @@ public sealed class AckFlusher(JobStore jobStore, JobsApiClient jobsApi, ILogger
     {
         var timeout = perAckTimeout ?? DefaultPerAckTimeout;
 
-        foreach (var pending in jobStore.GetPendingAcks())
+        foreach (var printed in jobStore.GetUnacknowledgedPrinted())
         {
-            ct.ThrowIfCancellationRequested();
-
-            var ack = JsonSerializer.Deserialize<AckRequest>(pending.BodyJson, JsonOptions);
-            if (ack is null)
+            var ack = new AckRequest { Status = AckRequestStatus.Printed, Attempts = printed.Attempts, PrintedAt = printed.PrintedAt };
+            if (!await SendAsync(printed.JobId, ack, timeout, ct).ConfigureAwait(false))
             {
-                // corpo local corrompido: nao ha o que reenviar, descarta.
-                jobStore.RemovePendingAck(pending.JobId);
-                continue;
-            }
-
-            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            attemptCts.CancelAfter(timeout);
-
-            try
-            {
-                var outcome = await jobsApi.AckJobAsync(pending.JobId, ack, attemptCts.Token).ConfigureAwait(false);
-                jobStore.RemovePendingAck(pending.JobId);
-                if (outcome == AckOutcome.Acknowledged)
-                {
-                    jobStore.MarkAcked(pending.JobId);
-                }
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                // Estourou o teto desta tentativa (backend ainda inacessivel
-                // ou lento): fica pendente, tenta de novo na proxima rodada.
-                jobStore.IncrementAckAttempt(pending.JobId);
-            }
-            catch (PrintAgentUnauthorizedException)
-            {
-                // Token invalido: o Worker ja vai reagir a isso no nivel do
-                // stream (limpar token, parar, pedir novo pareamento). Aqui
-                // so para de tentar mandar mais acks nesta rodada.
-                logger.LogWarning("Ack de {JobId} nao pode ser enviado: token invalido.", pending.JobId);
                 return;
             }
-            catch (PrintAgentVersionUnsupportedException)
+        }
+
+        foreach (var failed in jobStore.GetUnacknowledgedFailed())
+        {
+            var ack = new AckRequest
             {
-                logger.LogWarning("Ack de {JobId} nao pode ser enviado: versao do agente nao suportada.", pending.JobId);
+                Status = AckRequestStatus.Failed,
+                Attempts = failed.Attempts,
+                ErrorCode = ParseErrorCode(failed.ErrorCode),
+                ErrorMessage = failed.ErrorMessage,
+            };
+            if (!await SendAsync(failed.JobId, ack, timeout, ct).ConfigureAwait(false))
+            {
                 return;
             }
         }
     }
+
+    /// <returns><c>false</c> quando o token deixou de ser válido — sinal para parar a rodada inteira.</returns>
+    private async Task<bool> SendAsync(string jobId, AckRequest ack, TimeSpan timeout, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        attemptCts.CancelAfter(timeout);
+
+        try
+        {
+            var outcome = await jobsApi.AckJobAsync(jobId, ack, attemptCts.Token).ConfigureAwait(false);
+            if (outcome == AckOutcome.Acknowledged)
+            {
+                jobStore.MarkAcked(jobId);
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Estourou o teto desta tentativa (backend ainda inacessivel ou
+            // lento): fica pendente, tenta de novo na proxima rodada.
+            jobStore.RecordAckAttemptFailure(jobId, "timeout");
+            return true;
+        }
+        catch (PrintAgentUnauthorizedException)
+        {
+            // Token invalido: o Worker ja vai reagir a isso no nivel do
+            // stream (limpar token, parar, pedir novo pareamento). Aqui so
+            // para de tentar mandar mais acks nesta rodada.
+            logger.LogWarning("Ack de {JobId} nao pode ser enviado: token invalido.", jobId);
+            return false;
+        }
+        catch (PrintAgentVersionUnsupportedException)
+        {
+            logger.LogWarning("Ack de {JobId} nao pode ser enviado: versao do agente nao suportada.", jobId);
+            return false;
+        }
+    }
+
+    private static PrinterErrorCode? ParseErrorCode(string? errorCode) =>
+        errorCode is not null && Enum.TryParse<PrinterErrorCode>(errorCode, out var parsed) ? parsed : null;
 }
