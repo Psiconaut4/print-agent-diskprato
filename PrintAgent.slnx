@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/PrintAgent.Core.Tests/PrintAgent.Core.Tests.csproj" />
+    <Project Path="tests/PrintAgent.Host.Tests/PrintAgent.Host.Tests.csproj" />
     <Project Path="tests/PrintAgent.Printing.Tests/PrintAgent.Printing.Tests.csproj" />
     <Project Path="tests/PrintAgent.Transport.Tests/PrintAgent.Transport.Tests.csproj" />
   </Folder>
