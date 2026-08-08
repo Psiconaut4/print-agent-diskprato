@@ -34,6 +34,10 @@ dotnet build      # deve sair com 0 avisos, 0 erros (Directory.Build.props: warn
 dotnet test       # todos os projetos de teste, sem mocks de filesystem/HTTP — usam diretório temp real e servidor fake
 ```
 
+O que `dotnet test` não cobre (Tray, convivência do spooler com hardware
+real, fila local ponta a ponta contra backend real) está roteirizado em
+`docs/testes-manuais.md`.
+
 ## Estado atual (2026-08-08)
 
 Fases 0–4 e 6 completas (scaffold, Contracts, EscPosFormatter, transportes
