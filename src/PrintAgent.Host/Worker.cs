@@ -37,7 +37,19 @@ public sealed class Worker(
                 continue;
             }
 
-            await RunPairedAsync(stoppingToken).ConfigureAwait(false);
+            try
+            {
+                await RunPairedAsync(stoppingToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Qualquer falha de rede/IO que escape do stream SSE ou do loop de
+                // retry local nao pode derrubar o Worker inteiro (BackgroundService
+                // com excecao nao tratada mata o host) — loga e volta pro topo do
+                // loop, que reabre a conexao pareada do zero.
+                logger.LogError(ex, "Sessao pareada encerrada por erro inesperado — reconectando.");
+                await Task.Delay(PairingPollInterval, stoppingToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -154,7 +166,7 @@ public sealed class Worker(
                     await orchestrator.RetryAsync(due, profile, transport, ct).ConfigureAwait(false);
                 }
 
-                await ackFlusher.FlushAsync(ct).ConfigureAwait(false);
+                await RunSafelyAsync(() => ackFlusher.FlushAsync(ct), "flush de acks pendentes (retry loop)").ConfigureAwait(false);
 
                 tick++;
                 if (tick % StatusReportEveryNTicks == 0)

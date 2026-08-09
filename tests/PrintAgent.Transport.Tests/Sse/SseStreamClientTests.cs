@@ -59,6 +59,16 @@ public class SseStreamClientTests
         return response;
     }
 
+    private static HttpResponseMessage ResetStreamResponse(string initialBody)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new ThrowingReadStream(initialBody)),
+        };
+        response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+        return response;
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -155,6 +165,44 @@ public class SseStreamClientTests
         await WaitUntilAsync(() => handler.RequestCount == 2, TimeSpan.FromSeconds(5));
 
         cts.Cancel();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task ConnectionReset_DuringRead_ReconnectsInsteadOfThrowing()
+    {
+        // Regressão: um IOException/SocketException (reset de conexão) no meio
+        // da leitura só era capturado se fosse OperationCanceledException —
+        // qualquer outra exceção subia até o Worker e derrubava o processo
+        // inteiro do Host em vez de acionar o reconnect-com-backoff normal.
+        var handler = new ScriptedSseHandler();
+
+        handler.Enqueue(_ => ResetStreamResponse(
+            SseFrames.Frame("e0", "connected", """{"deviceId":"dev-1"}""")));
+
+        handler.Enqueue(_ => StreamResponse(
+            SseFrames.Frame("e1", "connected", """{"deviceId":"dev-1"}""")));
+
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.test"), Timeout = Timeout.InfiniteTimeSpan };
+        var fakeTime = new FakeTimeProvider();
+        var backoff = new RetryBackoffCalculator(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(60), 0.2, () => 0.5);
+        var client = new SseStreamClient(http, fakeTime, TimeSpan.FromSeconds(90), backoff);
+
+        using var cts = new CancellationTokenSource();
+        var runTask = client.RunAsync(cts.Token);
+
+        await WaitUntilAsync(() => handler.RequestCount == 1, TimeSpan.FromSeconds(5));
+
+        // dá tempo do IOException se propagar e o loop chegar ao Task.Delay do backoff.
+        await Task.Delay(100);
+
+        fakeTime.Advance(TimeSpan.FromSeconds(2));
+
+        await WaitUntilAsync(() => handler.RequestCount == 2, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        // Se a exceção não fosse tratada, este await relançaria o IOException
+        // em vez de terminar normalmente por cancelamento.
         await runTask;
     }
 

@@ -179,44 +179,58 @@ public sealed class SseStreamClient
                 return ConnectionOutcome.WaitAndReconnect();
             }
 
-            await using var stream = await response.Content.ReadAsStreamAsync(outerCt).ConfigureAwait(false);
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-
-            string? id = null;
-            string? evtName = null;
-            var data = new StringBuilder();
-
-            while (!linkedCts.IsCancellationRequested)
+            try
             {
-                string? line;
-                try
+                await using var stream = await response.Content.ReadAsStreamAsync(outerCt).ConfigureAwait(false);
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+
+                string? id = null;
+                string? evtName = null;
+                var data = new StringBuilder();
+
+                while (!linkedCts.IsCancellationRequested)
                 {
-                    line = await reader.ReadLineAsync(linkedCts.Token).ConfigureAwait(false);
+                    string? line;
+                    try
+                    {
+                        line = await reader.ReadLineAsync(linkedCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    if (line is null) break; // servidor fechou o stream
+
+                    if (line.Length == 0)
+                    {
+                        // frame completo: qualquer frame prova que a conexão está viva.
+                        watchdog.Change(_watchdogTimeout, Timeout.InfiniteTimeSpan);
+
+                        var terminal = Dispatch(id, evtName, data.ToString());
+                        id = null;
+                        evtName = null;
+                        data.Clear();
+
+                        if (terminal is { } outcome) return outcome;
+                        continue;
+                    }
+
+                    if (line.StartsWith("id: ", StringComparison.Ordinal)) id = line[4..];
+                    else if (line.StartsWith("event: ", StringComparison.Ordinal)) evtName = line[7..];
+                    else if (line.StartsWith("data: ", StringComparison.Ordinal)) data.Append(line[6..]);
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-
-                if (line is null) break; // servidor fechou o stream
-
-                if (line.Length == 0)
-                {
-                    // frame completo: qualquer frame prova que a conexão está viva.
-                    watchdog.Change(_watchdogTimeout, Timeout.InfiniteTimeSpan);
-
-                    var terminal = Dispatch(id, evtName, data.ToString());
-                    id = null;
-                    evtName = null;
-                    data.Clear();
-
-                    if (terminal is { } outcome) return outcome;
-                    continue;
-                }
-
-                if (line.StartsWith("id: ", StringComparison.Ordinal)) id = line[4..];
-                else if (line.StartsWith("event: ", StringComparison.Ordinal)) evtName = line[7..];
-                else if (line.StartsWith("data: ", StringComparison.Ordinal)) data.Append(line[6..]);
+            }
+            catch (IOException)
+            {
+                // conexao caiu no meio da leitura (reset, "connection aborted" etc.) —
+                // mesmo tratamento de uma desconexao normal: reconectar com backoff,
+                // nunca deixar subir e derrubar o Worker/host inteiro.
+                return ConnectionOutcome.WaitAndReconnect();
+            }
+            catch (HttpRequestException)
+            {
+                return ConnectionOutcome.WaitAndReconnect();
             }
         }
 
