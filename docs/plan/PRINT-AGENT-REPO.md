@@ -118,9 +118,90 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
   de teste impresso sem abrir terminal nem editar arquivo". Validação
   pendente antes de embalar a Fase 7.
 
-**Próximo passo:** Fase 7 (instalador WiX) — depois da validação manual do
-Tray. `ServiceInstall`/`ServiceControl` do serviço, tray no startup do
-usuário, ACL do `%ProgramData%`, desinstalação limpa.
+**Validação manual de 2026-08-09 (parcial — 3 bugs reais encontrados, ver
+`docs/testes-manuais.md` §2/§3/§5 para o passo a passo reproduzido):**
+
+- **Teste 1** (convivência do spooler): validado antes desta sessão, sem
+  pendência.
+- **Teste 2** (fila local/recuperação): pedido real chegou via SSE e
+  imprimiu localmente com sucesso (`printed/<jobId>.json` gravado), mas o
+  `ack` para o backend nunca é aceito — falha **determinística**, não
+  intermitente. Causa raiz: `AckFlusher`/`JobsApiClient` serializa
+  `printedAt` no formato round-trip padrão do `DateTimeOffset` do .NET
+  (ex.: `2026-08-09T19:41:47.2275009+00:00`, offset explícito), mas
+  `ackJobSchema` no backend (`src/modules/print-agents/print-agents.schema.ts`)
+  usa `z.iso.datetime()`, que por padrão exige sufixo `Z` e rejeita offset
+  `+00:00` — confirmado reproduzindo a validação Zod isoladamente. Todo ack
+  real volta `400 Bad Request` para sempre, então o pedido fica com
+  `status: "pending"` no backend indefinidamente mesmo já impresso. Bug
+  secundário encontrado no caminho: o loop periódico de ack
+  (`Worker.RunLocalRetryLoopAsync`) não envolve `ackFlusher.FlushAsync` em
+  `RunSafelyAsync`, então esse erro mata o loop silenciosamente sem log
+  nenhum — só o flush disparado no evento `Connected` está protegido e loga
+  o erro.
+  **Corrigido em 2026-08-09:** novo `UtcZDateTimeOffsetConverter`/
+  `UtcZNullableDateTimeOffsetConverter` (`PrintAgent.Contracts`), registrados
+  no `JsonSerializerOptions` de `JobsApiClient`, normalizam todo
+  `DateTimeOffset` de saída para UTC com sufixo `Z` antes de serializar —
+  não mexe no `Contracts.g.cs` gerado (regra do repo é nunca editar esse
+  arquivo à mão). Teste de regressão:
+  `JobsApiClientTests.AckJobAsync_SerializesPrintedAt_WithUtcZSuffix`. O bug
+  secundário também foi corrigido: `RunLocalRetryLoopAsync` agora chama
+  `ackFlusher.FlushAsync` dentro de `RunSafelyAsync`, então uma falha de ack
+  loga e o loop continua na próxima rodada em vez de morrer em silêncio.
+  Ainda falta reabrir o teste manual (pedido real + ack aceito) para
+  confirmar contra o backend de verdade.
+- **Teste 3** (SSE contra backend real): reproduzido organicamente (reset
+  de conexão do backend de dev, não provocado de propósito). Um
+  `IOException`/`SocketException` (reset de conexão, 10054) dentro do loop
+  de leitura em `SseStreamClient.ConnectAndPumpAsync` (linha do
+  `reader.ReadLineAsync`) só tem `catch` para `OperationCanceledException`
+  — a exceção sobe até `Worker.ExecuteAsync` e derruba o processo inteiro
+  do `PrintAgent.Host` (`BackgroundServiceExceptionBehavior = StopHost`) em
+  vez de acionar o reconnect-com-backoff documentado. Reproduzido 2x
+  seguidas na mesma sessão.
+  **Corrigido em 2026-08-09:** a leitura do stream em
+  `ConnectAndPumpAsync` agora está dentro de um `try/catch` que trata
+  `IOException` e `HttpRequestException` como qualquer outra queda de
+  conexão (`ConnectionOutcome.WaitAndReconnect()`), em vez de deixar subir.
+  Como segunda camada de proteção, `Worker.ExecuteAsync` também passou a
+  envolver `RunPairedAsync` num `try/catch` que loga qualquer exceção
+  inesperada não-`OperationCanceledException` e volta pro topo do loop
+  (reabrindo a sessão pareada do zero) em vez de deixar o
+  `BackgroundService` derrubar o host inteiro. Teste de regressão:
+  `SseStreamClientTests.ConnectionReset_DuringRead_ReconnectsInsteadOfThrowing`.
+  Falta reabrir o teste manual (derrubar a rede/matar a conexão com o Host
+  pareado rodando) para confirmar contra o backend de verdade.
+- **Teste 5** (Tray): tela de setup abre ilegível — bloqueante, impede
+  validar o resto do checklist (configurar impressora, teste de impressão,
+  persistência, estado da impressora, despareamento). Causa raiz em
+  `SetupForm.Section()` (`SetupForm.cs`): cada `GroupBox` é criado com
+  `AutoSize = true` **e** `Width = 440` ao mesmo tempo, e o
+  `FlowLayoutPanel` interno também é `AutoSize = true` com
+  `Dock = DockStyle.Top` — a combinação faz o engine de layout colapsar a
+  caixa para uma largura quase zero: o título vira uma coluna de um
+  caractere por linha e nenhum controle (textbox/combo/botão) fica visível
+  ou clicável.
+  **Corrigido em 2026-08-09:** removido `Dock = DockStyle.Top` do
+  `FlowLayoutPanel` interno (o que forçava o cálculo de tamanho preferido a
+  zero durante o `AutoSize` do `GroupBox` pai) e trocado `Width = 440` fixo
+  no `GroupBox` por `MinimumSize = new Size(440, 0)`, que não briga com
+  `AutoSize` do jeito que uma largura exata briga. `dotnet build` limpo;
+  como é UI WinForms sem teste automatizado (natureza da Fase 6), falta
+  reabrir o checklist visual completo do Tray (`docs/testes-manuais.md` §5)
+  pra confirmar que o layout renderiza corretamente numa sessão desktop de
+  verdade.
+  Pedido de melhoria observado junto (não é bug, não endereçado): trocar o
+  ícone atual da bandeja por algo mais estilizado (ex. cabeça de robô ou
+  motivo de impressão), hoje é só um ícone genérico de cor sólida.
+
+**Próximo passo:** os três bugs acima foram corrigidos nesta sessão
+(commits a seguir) — falta reabrir a validação manual do Tray/fila
+local/SSE (`docs/testes-manuais.md` §2/§3/§5) numa sessão desktop real para
+confirmar as correções contra hardware/backend de verdade antes de seguir
+para a Fase 7 (instalador WiX). `ServiceInstall`/`ServiceControl` do
+serviço, tray no startup do usuário, ACL do `%ProgramData%`, desinstalação
+limpa.
 
 ---
 
@@ -391,7 +472,7 @@ Regras que o layout **tem** que respeitar, e que vêm do contrato:
 
 ## 6. Como o agente conversa com a API
 
-Base: `https://api.diskprato.com`. Todas as rotas de dispositivo levam
+Base: `http://localhost:5000`. Todas as rotas de dispositivo levam
 `Authorization: Bearer <deviceToken>` e o header
 `X-Print-Agent-Version: <semver>`.
 

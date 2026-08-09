@@ -153,6 +153,31 @@ processo rodando de verdade.
 - `printed\`/`failed\` acabam com `acked: true` (confirmação chega ao
   backend mesmo que atrasada).
 
+### Resultado (2026-08-09)
+
+**Falhou** no critério de ack. Pedido real (`Pedido-0006-HJB5`) chegou via
+SSE e imprimiu localmente sem erro (`printed\<jobId>.json` gravado,
+`attempts: 1`), mas `acked` nunca virou `true` — mesmo esperando vários
+minutos e reiniciando o Host duas vezes. Causa: o backend rejeita todo
+`ack` com `400 Bad Request` porque `printedAt` sai serializado como
+`2026-08-09T19:41:47.2275009+00:00` (offset explícito, formato padrão do
+`DateTimeOffset` do .NET) e `ackJobSchema` (`print-agents.schema.ts`) usa
+`z.iso.datetime()`, que exige sufixo `Z` e rejeita offset — confirmado
+reproduzindo a validação Zod isolada. Falha é determinística, não
+intermitente. Ver `docs/plan/PRINT-AGENT-REPO.md §0` para detalhe
+completo, incluindo um bug secundário (o loop periódico de ack engole essa
+falha sem logar nada). Os testes de recuperação (matar o processo em
+`pending\`) e de retry/falha (fila inválida) não chegaram a ser executados
+por causa deste bloqueio.
+
+**Corrigido em 2026-08-09** (ver `docs/plan/PRINT-AGENT-REPO.md §0` para o
+detalhe): `printedAt` agora sempre serializa em UTC com sufixo `Z`, e o
+flush de ack no loop de retry local não morre mais em silêncio quando falha.
+`dotnet test` cobre a serialização (`JobsApiClientTests`); **este teste
+manual (§2) precisa ser refeito do zero** — incluindo os passos de
+recuperação e retry/falha que não chegaram a rodar da vez passada — para
+confirmar contra o backend real.
+
 ---
 
 ## 3. Cliente HTTP/SSE contra o backend real (Fase 3) — smoke opcional
@@ -168,6 +193,28 @@ não reproduzirem:
   90s ou erro de socket) e reconecta sozinho com backoff.
 - Revogue o dispositivo pelo dashboard — confira que o Host apaga o token
   e **para** de tentar reconectar (não deve entrar em loop de erro 401).
+
+### Resultado (2026-08-09)
+
+**Falhou** — não intencional, reproduzido organicamente (o backend de dev
+resetou a conexão durante a sessão). Um `IOException`/`SocketException`
+(reset de conexão, 10054) dentro de `SseStreamClient.ConnectAndPumpAsync`
+só é capturado se for `OperationCanceledException` — qualquer outra
+exceção de rede sobe até `Worker.ExecuteAsync` e derruba o **processo
+inteiro** do `PrintAgent.Host` (`BackgroundServiceExceptionBehavior =
+StopHost`), em vez de acionar o reconnect-com-backoff que este teste
+deveria confirmar. Reproduzido 2x seguidas na mesma sessão (mesmo
+stacktrace as duas vezes). Ver `docs/plan/PRINT-AGENT-REPO.md §0` para o
+detalhe completo.
+
+**Corrigido em 2026-08-09**: `IOException`/`HttpRequestException` durante a
+leitura do stream agora acionam reconexão com backoff normal, e
+`Worker.ExecuteAsync` ganhou uma segunda camada de proteção (qualquer
+exceção inesperada na sessão pareada loga e reabre em vez de derrubar o
+host). `dotnet test` cobre o caso de reset de conexão
+(`SseStreamClientTests.ConnectionReset_DuringRead_ReconnectsInsteadOfThrowing`).
+**Este teste manual (§3) precisa ser refeito** — derrubar a rede com o Host
+pareado e rodando — para confirmar contra condições de rede reais.
 
 ---
 
@@ -287,6 +334,33 @@ Send-Ipc '{"Command":"unpair"}'
 
 (`"Transport":0` = spooler, `"Transport":1` = network — o pipe serializa o
 enum como número, não como texto.)
+
+### Resultado (2026-08-09)
+
+**Bloqueado** logo no primeiro item visual do roteiro — a tela de setup
+abre completamente ilegível (screenshot arquivado nesta sessão): cada
+`GroupBox` ("Estado", "Pareamento", "Impressora") renderiza como uma
+coluna estreitíssima com o título quebrado uma letra por linha, e nenhum
+controle (textbox/combo/botão) fica visível. Causa raiz em
+`SetupForm.Section()`: `GroupBox` com `AutoSize = true` **e**
+`Width = 440` ao mesmo tempo, combinado com o `FlowLayoutPanel` interno
+também `AutoSize = true` + `Dock = DockStyle.Top` — o layout engine
+colapsa a caixa a uma largura quase zero. Não é problema de DPI. O
+pareamento em si (via pipe, fora da UI) funcionou normalmente — só a tela
+visual do Tray está quebrada. Nenhum item do checklist abaixo foi validado
+por causa deste bloqueio. Pedido de melhoria observado à parte (não é
+bug): trocar o ícone atual da bandeja (cor sólida genérica) por algo mais
+estilizado, como uma cabeça de robô ou motivo de impressão. Ver
+`docs/plan/PRINT-AGENT-REPO.md §0` para o detalhe completo.
+
+**Corrigido em 2026-08-09**: `SetupForm.Section()` não doca mais o
+`FlowLayoutPanel` interno (`Dock = DockStyle.Top` removido) e o `GroupBox`
+usa `MinimumSize = new Size(440, 0)` em vez de `Width = 440` fixo — as duas
+mudanças eliminam o conflito com `AutoSize`. `dotnet build` limpo, mas
+como é UI WinForms sem cobertura de teste automatizado (natureza da Fase
+6), **todo o checklist desta seção §5 precisa ser refeito do zero** numa
+sessão desktop real para confirmar visualmente. Pedido de melhoria do
+ícone não foi endereçado (fora de escopo desta correção).
 
 ---
 
