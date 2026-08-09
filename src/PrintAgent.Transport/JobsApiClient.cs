@@ -33,7 +33,15 @@ public sealed class JobsApiClient
     private const string PendingPath = "/api/print-agents/v1/jobs/pending";
     private const string StatusPath = "/api/print-agents/v1/status";
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new UtcZDateTimeOffsetConverter());
+        options.Converters.Add(new UtcZNullableDateTimeOffsetConverter());
+        return options;
+    }
 
     private readonly HttpClient _http;
     private readonly TimeProvider _timeProvider;
