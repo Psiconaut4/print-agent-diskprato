@@ -56,7 +56,7 @@ public sealed class AgentIpcClient
         }
         catch (TimeoutException)
         {
-            return new IpcResponseDto { Ok = false, Error = "Serviço DiskPrato Print Agent não está rodando." };
+            return new IpcResponseDto { Ok = false, Error = "Serviço Gerente de Impressão DiskPrato não está rodando." };
         }
         catch (IOException ex)
         {

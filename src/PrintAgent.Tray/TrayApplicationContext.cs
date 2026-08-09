@@ -28,7 +28,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _icon = new NotifyIcon
         {
             Icon = TrayIcons.Unknown,
-            Text = "DiskPrato Print Agent",
+            Text = "Gerente de Impressão DiskPrato",
             ContextMenuStrip = menu,
             Visible = true,
         };
@@ -58,7 +58,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var result = await _ipc.TestPrintAsync();
         _icon.ShowBalloonTip(
             4000,
-            "DiskPrato Print Agent",
+            "Gerente de Impressão DiskPrato",
             result.Ok ? "Cupom de teste enviado." : $"Falha no teste de impressão: {result.Error}",
             result.Ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
         await RefreshStatusAsync();
@@ -79,16 +79,16 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         if (status is null)
         {
-            return $"DiskPrato Print Agent\n{error ?? "Serviço indisponível"}";
+            return $"Gerente de Impressão DiskPrato\n{error ?? "Serviço indisponível"}";
         }
 
         if (!status.Paired)
         {
-            return "DiskPrato Print Agent\nAguardando pareamento";
+            return "Gerente de Impressão DiskPrato\nAguardando pareamento";
         }
 
         var connection = status.StreamConnected ? "conectado" : "sem conexão";
-        return $"DiskPrato Print Agent\n{connection} — {status.QueuedJobs} na fila";
+        return $"Gerente de Impressão DiskPrato\n{connection} — {status.QueuedJobs} na fila";
     }
 
     // NotifyIcon.Text é truncado silenciosamente pelo Windows acima de ~127

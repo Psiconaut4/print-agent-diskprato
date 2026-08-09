@@ -33,7 +33,9 @@ public sealed class SetupForm : Form
     private readonly Button _saveButton;
     private readonly Button _testPrintButton;
 
-    private readonly ListBox _activityList;
+    private readonly RichTextBox _activityList;
+    private readonly List<(string Text, Color Color)> _activityEntries = new();
+    private const int MaxActivityEntries = 50;
 
     private sealed record CodePagePreset(string Label, int CodePage, int EscTIndex)
     {
@@ -44,14 +46,15 @@ public sealed class SetupForm : Form
     {
         _ipc = ipc;
 
-        Text = "DiskPrato Print Agent — Configuração";
+        Text = "Gerente de Impressão DiskPrato — Configuração";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(460, 620);
+        ClientSize = new Size(480, 860);
         Icon = TrayIcons.Unknown;
         Padding = new Padding(10);
+        BackColor = Color.FromArgb(240, 240, 240); // cinza claro por trás dos cards brancos das seções
 
         var root = new FlowLayoutPanel
         {
@@ -62,7 +65,13 @@ public sealed class SetupForm : Form
         };
         Controls.Add(root);
 
-        _summaryLabel = new Label { AutoSize = true, MaximumSize = new Size(430, 0), Text = "Consultando o serviço..." };
+        _summaryLabel = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(400, 0),
+            Text = "Consultando o serviço...",
+            Font = new Font(Font, FontStyle.Bold),
+        };
         root.Controls.Add(Section("Estado", [_summaryLabel]));
 
         _codeBox = new TextBox { Width = 200 };
@@ -87,8 +96,8 @@ public sealed class SetupForm : Form
         RefreshPrinterQueues();
         _spoolerRow = LabeledRow("Fila de impressão", _spoolerNameCombo);
 
-        _hostBox = new TextBox { Width = 150 };
-        _portUpDown = new NumericUpDown { Minimum = 1, Maximum = 65535, Value = 9100, Width = 80 };
+        _hostBox = new TextBox { Width = 120 };
+        _portUpDown = new NumericUpDown { Minimum = 1, Maximum = 65535, Value = 9100, Width = 60 };
         var networkFields = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
         networkFields.Controls.Add(new Label { Text = "IP", AutoSize = true, Margin = new Padding(0, 6, 4, 0) });
         networkFields.Controls.Add(_hostBox);
@@ -123,7 +132,17 @@ public sealed class SetupForm : Form
             ButtonRow(_saveButton, _testPrintButton),
         ]));
 
-        _activityList = new ListBox { Width = 430, Height = 150 };
+        _activityList = new RichTextBox
+        {
+            Width = 400,
+            Height = 170,
+            ReadOnly = true,
+            WordWrap = true,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.White,
+            TabStop = false,
+        };
         root.Controls.Add(Section("Atividade recente", [_activityList]));
 
         Load += async (_, _) => await OnLoadAsync();
@@ -134,7 +153,7 @@ public sealed class SetupForm : Form
         var config = await _ipc.GetConfigAsync();
         if (!config.Ok || config.Printer is null)
         {
-            LogActivity($"Não foi possível ler a configuração atual: {config.Error ?? "erro desconhecido"}.");
+            LogActivity($"Não foi possível ler a configuração atual: {config.Error ?? "erro desconhecido"}.", success: false);
         }
         else
         {
@@ -200,6 +219,10 @@ public sealed class SetupForm : Form
 
     private void ApplyStatus(AgentStatusDto? status, string? error)
     {
+        // Mesma paleta do ícone da bandeja (cinza/vermelho/laranja/verde) —
+        // o resumo aqui e o ícone sempre concordam sobre o estado atual.
+        _summaryLabel.ForeColor = TrayIcons.ColorFor(status);
+
         if (status is null)
         {
             _summaryLabel.Text = $"Serviço indisponível.\n{error}";
@@ -264,11 +287,11 @@ public sealed class SetupForm : Form
             if (response.Ok)
             {
                 _codeBox.Clear();
-                LogActivity("Pareado com sucesso.");
+                LogActivity("Pareado com sucesso.", success: true);
             }
             else
             {
-                LogActivity($"Falha ao parear: {response.Error}");
+                LogActivity($"Falha ao parear: {response.Error}", success: false);
             }
 
             ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
@@ -290,7 +313,7 @@ public sealed class SetupForm : Form
         }
 
         var response = await _ipc.UnpairAsync();
-        LogActivity(response.Ok ? "Dispositivo despareado." : $"Falha ao desparear: {response.Error}");
+        LogActivity(response.Ok ? "Dispositivo despareado." : $"Falha ao desparear: {response.Error}", response.Ok);
         ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
     }
 
@@ -329,7 +352,7 @@ public sealed class SetupForm : Form
         try
         {
             var response = await _ipc.SetPrinterAsync(printer);
-            LogActivity(response.Ok ? "Configuração da impressora salva." : $"Falha ao salvar: {response.Error}");
+            LogActivity(response.Ok ? "Configuração da impressora salva." : $"Falha ao salvar: {response.Error}", response.Ok);
             ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
         }
         finally
@@ -344,7 +367,7 @@ public sealed class SetupForm : Form
         try
         {
             var response = await _ipc.TestPrintAsync();
-            LogActivity(response.Ok ? "Cupom de teste enviado." : $"Falha no teste de impressão: {response.Error}");
+            LogActivity(response.Ok ? "Cupom de teste enviado." : $"Falha no teste de impressão: {response.Error}", response.Ok);
             ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
         }
         finally
@@ -353,13 +376,43 @@ public sealed class SetupForm : Form
         }
     }
 
-    private void LogActivity(string message)
+    /// <summary><paramref name="success"/> colore a linha: <c>true</c> verde, <c>false</c> vermelho, <c>null</c> neutro (avisos de preenchimento, não são o resultado de uma ação).</summary>
+    private void LogActivity(string message, bool? success = null)
     {
-        _activityList.Items.Insert(0, $"{DateTime.Now:HH:mm:ss} — {message}");
-        while (_activityList.Items.Count > 50)
+        var color = success switch
         {
-            _activityList.Items.RemoveAt(_activityList.Items.Count - 1);
+            true => Color.SeaGreen,
+            false => Color.Firebrick,
+            null => Color.Black,
+        };
+
+        _activityEntries.Insert(0, ($"{DateTime.Now:HH:mm:ss} — {message}", color));
+        if (_activityEntries.Count > MaxActivityEntries)
+        {
+            _activityEntries.RemoveAt(_activityEntries.Count - 1);
         }
+
+        RenderActivity();
+    }
+
+    // RichTextBox não tem um equivalente a ListBox.Items.Insert por item —
+    // mais simples e sempre correto redesenhar a lista inteira (no máximo
+    // 50 linhas curtas) do que tentar achar offsets de linha pra colorir só
+    // a nova entrada.
+    private void RenderActivity()
+    {
+        _activityList.SuspendLayout();
+        _activityList.Clear();
+        foreach (var (text, color) in _activityEntries)
+        {
+            _activityList.SelectionStart = _activityList.TextLength;
+            _activityList.SelectionLength = 0;
+            _activityList.SelectionColor = color;
+            _activityList.AppendText(text + Environment.NewLine);
+        }
+        _activityList.SelectionStart = 0;
+        _activityList.SelectionLength = 0;
+        _activityList.ResumeLayout();
     }
 
     private sealed record PaperWidthOption(int Millimeters, string Label)
@@ -367,35 +420,77 @@ public sealed class SetupForm : Form
         public override string ToString() => Label;
     }
 
-    private static GroupBox Section(string title, IEnumerable<Control> rows)
+    private static readonly Font SectionTitleFont = new("Segoe UI Semibold", 10.5f, FontStyle.Regular);
+    private static readonly Color SectionTitleColor = Color.FromArgb(45, 45, 45);
+
+    // Um GroupBox aqui parece a escolha óbvia, mas AutoSize=true num GroupBox
+    // com FlowLayoutPanel interno também AutoSize colapsa a legenda/borda de
+    // forma imprevisível (bug real encontrado em validação manual — a caixa
+    // vira uma coluna de um caractere de largura). Em vez de brigar com o
+    // AutoSize embutido do GroupBox, monta-se o "card" à mão: um Panel com
+    // borda fina + título em Label separado, cujo dimensionamento segue a
+    // mesma regra que já provou funcionar no conteúdo (nunca combinar
+    // AutoSize com Dock).
+    private static Panel Section(string title, IEnumerable<Control> rows)
     {
-        var flow = new FlowLayoutPanel
+        var titleLabel = new Label
+        {
+            Text = title,
+            AutoSize = true,
+            Font = SectionTitleFont,
+            ForeColor = SectionTitleColor,
+            Margin = new Padding(0, 0, 0, 10),
+        };
+
+        var rowsFlow = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
             AutoSize = true,
-            Dock = DockStyle.Top,
-            Padding = new Padding(0, 10, 0, 0),
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
         foreach (var row in rows)
         {
-            flow.Controls.Add(row);
+            rowsFlow.Controls.Add(row);
         }
 
-        return new GroupBox
+        var content = new FlowLayoutPanel
         {
-            Text = title,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
             AutoSize = true,
-            Width = 440,
-            Padding = new Padding(10),
-            Margin = new Padding(0, 0, 0, 10),
-            Controls = { flow },
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(16),
+        };
+        content.Controls.Add(titleLabel);
+        content.Controls.Add(rowsFlow);
+
+        return new Panel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            // MinimumSize, nao Width: uma largura fixa entraria em conflito
+            // direto com AutoSize (o mesmo bug do GroupBox); MinimumSize so
+            // estabelece um piso, deixando o autosize livre para crescer além
+            // dele quando o conteúdo pedir.
+            MinimumSize = new Size(440, 0),
+            // Anchor Left+Right (sem Bottom) trava a largura do card exatamente
+            // na largura disponível do FlowLayoutPanel pai — inclusive quando a
+            // barra de rolagem vertical aparece e reduz essa largura — em vez de
+            // deixar o card crescer além dela e forçar rolagem lateral no
+            // formulário inteiro. A altura continua livre (AutoSize) porque
+            // Bottom não está ancorado.
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            BackColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle,
+            Margin = new Padding(0, 0, 0, 12),
+            Controls = { content },
         };
     }
 
     private static FlowLayoutPanel LabeledRow(string label, Control control)
     {
-        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 8) };
         row.Controls.Add(new Label { Text = label, AutoSize = true, Width = 140, Margin = new Padding(0, 6, 8, 0) });
         row.Controls.Add(control);
         return row;
@@ -403,14 +498,14 @@ public sealed class SetupForm : Form
 
     private static FlowLayoutPanel Row(Control control)
     {
-        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 8) };
         row.Controls.Add(control);
         return row;
     }
 
     private static FlowLayoutPanel ButtonRow(params Control[] buttons)
     {
-        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 6, 0, 0) };
+        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 8, 0, 0) };
         foreach (var button in buttons)
         {
             button.Margin = new Padding(0, 0, 8, 0);
