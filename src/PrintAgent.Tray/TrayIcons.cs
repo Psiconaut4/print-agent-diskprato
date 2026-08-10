@@ -68,7 +68,7 @@ internal static class TrayIcons
             return AgentVisualState.Disconnected;
         }
 
-        return status.PrinterStatus is "Offline" or "PaperOut" or "CoverOpen"
+        return status.PrinterStatus is "Offline" or "PaperOut" or "CoverOpen" or "Unknown"
             ? AgentVisualState.PrinterProblem
             : AgentVisualState.Connected;
     }
