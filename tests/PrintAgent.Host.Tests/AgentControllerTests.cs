@@ -86,4 +86,27 @@ public class AgentControllerTests : IDisposable
 
         Assert.Equal("Balcao", _controller.ResolveDefaultPrinter().SpoolerName);
     }
+
+    [Fact]
+    public void RemovePrinterConfig_removes_only_the_matching_station()
+    {
+        _controller.UpdatePrinterConfig(new PrinterConfig { Station = null, SpoolerName = "Balcao" });
+        _controller.UpdatePrinterConfig(new PrinterConfig { Station = PrintJobTarget.Kitchen, SpoolerName = "Cozinha" });
+
+        _controller.RemovePrinterConfig(PrintJobTarget.Kitchen);
+
+        var printer = Assert.Single(_controller.Config.Printers);
+        Assert.Null(printer.Station);
+        Assert.Equal("Balcao", printer.SpoolerName);
+    }
+
+    [Fact]
+    public void RemovePrinterConfig_of_a_station_that_does_not_exist_is_a_no_op()
+    {
+        _controller.UpdatePrinterConfig(new PrinterConfig { Station = null, SpoolerName = "Balcao" });
+
+        _controller.RemovePrinterConfig(PrintJobTarget.Bar);
+
+        Assert.Single(_controller.Config.Printers);
+    }
 }

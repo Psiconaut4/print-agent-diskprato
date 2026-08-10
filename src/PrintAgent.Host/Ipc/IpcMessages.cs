@@ -1,10 +1,12 @@
+using PrintAgent.Contracts;
+
 namespace PrintAgent.Host.Ipc;
 
 /// <summary>
 /// Requisição JSON (uma linha por mensagem) do named pipe
 /// <c>\\.\pipe\diskprato-printagent</c> (plano §7.4). <see cref="Command"/>:
-/// <c>get-status</c>, <c>test-print</c>, <c>set-printer</c>, <c>pair</c>,
-/// <c>unpair</c>.
+/// <c>get-status</c>, <c>get-config</c>, <c>test-print</c>, <c>set-printer</c>,
+/// <c>remove-printer</c>, <c>pair</c>, <c>unpair</c>.
 /// </summary>
 public sealed class IpcRequest
 {
@@ -16,6 +18,14 @@ public sealed class IpcRequest
 
     // set-printer
     public Config.PrinterConfig? Printer { get; set; }
+
+    /// <summary>
+    /// <c>remove-printer</c>: qual estação remover de <see cref="Config.AgentConfig.Printers"/>.
+    /// <c>test-print</c>: qual estação testar — ausente (null) testa a
+    /// impressora "padrão" (plano §10), mesmo comportamento de antes desta
+    /// estação existir no protocolo.
+    /// </summary>
+    public PrintJobTarget? Station { get; set; }
 }
 
 public sealed class IpcResponse
@@ -24,11 +34,15 @@ public sealed class IpcResponse
     public string? Error { get; set; }
     public AgentStatusSnapshot? Status { get; set; }
 
-    /// <summary>Só preenchido em resposta a <c>get-config</c> (plano §7.4/Fase 6) — a tela de setup precisa dos valores atuais para pré-preencher os campos.</summary>
-    public Config.PrinterConfig? Printer { get; set; }
+    /// <summary>
+    /// Só preenchido em resposta a <c>get-config</c> (plano §7.4/§10) — a
+    /// tela de setup precisa da lista inteira para desenhar uma seção por
+    /// estação configurada, não só a impressora "padrão".
+    /// </summary>
+    public IReadOnlyList<Config.PrinterConfig>? Printers { get; set; }
 
-    public static IpcResponse Success(AgentStatusSnapshot? status = null, Config.PrinterConfig? printer = null) =>
-        new() { Ok = true, Status = status, Printer = printer };
+    public static IpcResponse Success(AgentStatusSnapshot? status = null, IReadOnlyList<Config.PrinterConfig>? printers = null) =>
+        new() { Ok = true, Status = status, Printers = printers };
 
     public static IpcResponse Failure(string error) => new() { Ok = false, Error = error };
 }

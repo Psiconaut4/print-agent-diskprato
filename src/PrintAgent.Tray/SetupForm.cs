@@ -4,11 +4,12 @@ using PrintAgent.Tray.Ipc;
 namespace PrintAgent.Tray;
 
 /// <summary>
-/// Tela de setup do Tray (plano §7.4, Fase 6): pareamento, escolha de fila
-/// ou IP:porta, papel/code page, teste de impressão, log recente. Fala com
-/// o serviço só pelo named pipe — nunca lê <c>agent.json</c> nem o token
-/// diretamente (plano §7.2/§7.3), porque o serviço roda como
-/// <c>LocalSystem</c> e este processo roda como o usuário logado.
+/// Tela de setup do Tray (plano §7.4, Fase 6; seções por estação, Fase 3 do
+/// §10): pareamento, uma seção de impressora por estação (fila/IP:porta,
+/// papel/code page, teste de impressão), log recente. Fala com o serviço só
+/// pelo named pipe — nunca lê <c>agent.json</c> nem o token diretamente
+/// (plano §7.2/§7.3), porque o serviço roda como <c>LocalSystem</c> e este
+/// processo roda como o usuário logado.
 /// </summary>
 public sealed class SetupForm : Form
 {
@@ -20,18 +21,8 @@ public sealed class SetupForm : Form
     private readonly Button _pairButton;
     private readonly Button _unpairButton;
 
-    private readonly ComboBox _transportCombo;
-    private readonly FlowLayoutPanel _spoolerRow;
-    private readonly ComboBox _spoolerNameCombo;
-    private readonly FlowLayoutPanel _networkRow;
-    private readonly TextBox _hostBox;
-    private readonly NumericUpDown _portUpDown;
-    private readonly ComboBox _paperWidthCombo;
-    private readonly ComboBox _codePageCombo;
-    private readonly CheckBox _stripAccentsCheck;
-    private readonly NumericUpDown _copiesUpDown;
-    private readonly Button _saveButton;
-    private readonly Button _testPrintButton;
+    private readonly FlowLayoutPanel _printersContainer;
+    private readonly List<PrinterSectionView> _printerSections = new();
 
     private readonly RichTextBox _activityList;
     private readonly List<(string Text, Color Color)> _activityEntries = new();
@@ -40,6 +31,50 @@ public sealed class SetupForm : Form
     private sealed record CodePagePreset(string Label, int CodePage, int EscTIndex)
     {
         public override string ToString() => Label;
+    }
+
+    private sealed record PaperWidthOption(int Millimeters, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    /// <summary>Estações do contrato (plano §10) mais a entrada "padrão" (<c>null</c>), pt-BR pronto pra combo.</summary>
+    private sealed record StationOption(StationDto? Value, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private static readonly StationOption[] StationOptions =
+    [
+        new(null, "Padrão — recebe tudo sem impressora própria"),
+        new(StationDto.Kitchen, "Cozinha"),
+        new(StationDto.Bar, "Bar"),
+        new(StationDto.Counter, "Balcão"),
+        new(StationDto.Customer, "Cliente"),
+    ];
+
+    private static string GetStationLabel(StationDto? station) => StationOptions.First(o => o.Value == station).Label;
+
+    /// <summary>Controles de uma seção "Impressora" (uma por estação configurada, plano §10).</summary>
+    private sealed class PrinterSectionView
+    {
+        public required Panel Card { get; init; }
+        public required ComboBox StationCombo { get; init; }
+        public required ComboBox TransportCombo { get; init; }
+        public required FlowLayoutPanel SpoolerRow { get; init; }
+        public required ComboBox SpoolerNameCombo { get; init; }
+        public required FlowLayoutPanel NetworkRow { get; init; }
+        public required TextBox HostBox { get; init; }
+        public required NumericUpDown PortUpDown { get; init; }
+        public required ComboBox PaperWidthCombo { get; init; }
+        public required ComboBox CodePageCombo { get; init; }
+        public required CheckBox StripAccentsCheck { get; init; }
+        public required NumericUpDown CopiesUpDown { get; init; }
+        public required Button SaveButton { get; init; }
+        public required Button TestPrintButton { get; init; }
+        public required Button RemoveButton { get; init; }
+
+        public StationDto? SelectedStation => ((StationOption)StationCombo.SelectedItem!).Value;
     }
 
     public SetupForm(AgentIpcClient ipc)
@@ -87,50 +122,21 @@ public sealed class SetupForm : Form
             ButtonRow(_pairButton, _unpairButton),
         ]));
 
-        _transportCombo = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
-        _transportCombo.Items.Add("Fila do Windows (spooler)");
-        _transportCombo.Items.Add("Rede (IP:porta)");
-        _transportCombo.SelectedIndexChanged += (_, _) => UpdateTransportVisibility();
+        root.Controls.Add(SectionTitleLabel("Impressoras"));
 
-        _spoolerNameCombo = new ComboBox { Width = 250, DropDownStyle = ComboBoxStyle.DropDown };
-        RefreshPrinterQueues();
-        _spoolerRow = LabeledRow("Fila de impressão", _spoolerNameCombo);
+        _printersContainer = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+        root.Controls.Add(_printersContainer);
 
-        _hostBox = new TextBox { Width = 120 };
-        _portUpDown = new NumericUpDown { Minimum = 1, Maximum = 65535, Value = 9100, Width = 60 };
-        var networkFields = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
-        networkFields.Controls.Add(new Label { Text = "IP", AutoSize = true, Margin = new Padding(0, 6, 4, 0) });
-        networkFields.Controls.Add(_hostBox);
-        networkFields.Controls.Add(new Label { Text = "Porta", AutoSize = true, Margin = new Padding(10, 6, 4, 0) });
-        networkFields.Controls.Add(_portUpDown);
-        _networkRow = LabeledRow("Impressora de rede", networkFields);
-
-        _paperWidthCombo = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
-        _paperWidthCombo.Items.Add(new PaperWidthOption(80, "80mm — 48 colunas (fonte A)"));
-        _paperWidthCombo.Items.Add(new PaperWidthOption(58, "58mm — 32 colunas (fonte A)"));
-
-        _codePageCombo = new ComboBox { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
-        _codePageCombo.Items.Add(new CodePagePreset("CP850 — Europa Ocidental (padrão Epson, n=2)", 850, 2));
-        _codePageCombo.Items.Add(new CodePagePreset("CP860 — Português (n=3)", 860, 3));
-
-        _stripAccentsCheck = new CheckBox { Text = "Remover acentos (fallback se o cupom sair errado)", AutoSize = true };
-        _copiesUpDown = new NumericUpDown { Minimum = 1, Maximum = 5, Value = 1, Width = 60 };
-
-        _saveButton = new Button { Text = "Salvar", AutoSize = true };
-        _saveButton.Click += async (_, _) => await OnSaveAsync();
-        _testPrintButton = new Button { Text = "Imprimir teste", AutoSize = true };
-        _testPrintButton.Click += async (_, _) => await OnTestPrintAsync();
-
-        root.Controls.Add(Section("Impressora", [
-            LabeledRow("Transporte", _transportCombo),
-            _spoolerRow,
-            _networkRow,
-            LabeledRow("Papel", _paperWidthCombo),
-            LabeledRow("Code page", _codePageCombo),
-            Row(_stripAccentsCheck),
-            LabeledRow("Cópias", _copiesUpDown),
-            ButtonRow(_saveButton, _testPrintButton),
-        ]));
+        var addPrinterButton = new Button { Text = "+ Adicionar impressora", AutoSize = true, Margin = new Padding(0, 0, 0, 12) };
+        addPrinterButton.Click += (_, _) => AddPrinterSection(initial: null);
+        root.Controls.Add(addPrinterButton);
 
         _activityList = new RichTextBox
         {
@@ -151,71 +157,31 @@ public sealed class SetupForm : Form
     private async Task OnLoadAsync()
     {
         var config = await _ipc.GetConfigAsync();
-        if (!config.Ok || config.Printer is null)
+        if (!config.Ok)
         {
             LogActivity($"Não foi possível ler a configuração atual: {config.Error ?? "erro desconhecido"}.", success: false);
         }
+
+        if (!config.Ok || config.Printers is null || config.Printers.Count == 0)
+        {
+            // Instalação nova ou config ilegível: sempre deixa pelo menos uma
+            // seção editável na tela — nunca uma lista vazia sem jeito óbvio
+            // de começar a configurar.
+            AddPrinterSection(initial: null);
+        }
         else
         {
-            ApplyPrinterConfig(config.Printer);
+            foreach (var printer in config.Printers)
+            {
+                AddPrinterSection(printer);
+            }
         }
 
-        UpdateTransportVisibility();
         ApplyStatus(config.Ok ? config.Status : null, config.Ok ? null : config.Error);
     }
 
     /// <summary>Chamado pelo <see cref="TrayApplicationContext"/> a cada rodada de polling — mantém o resumo no topo sempre atual mesmo com a tela aberta.</summary>
     public void OnStatusUpdated(IpcResponseDto response) => ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
-
-    private void ApplyPrinterConfig(PrinterConfigDto printer)
-    {
-        _transportCombo.SelectedIndex = printer.Transport == PrinterTransportKind.Network ? 1 : 0;
-        if (!string.IsNullOrEmpty(printer.SpoolerName) && !_spoolerNameCombo.Items.Contains(printer.SpoolerName))
-        {
-            _spoolerNameCombo.Items.Add(printer.SpoolerName);
-        }
-        _spoolerNameCombo.Text = printer.SpoolerName ?? "";
-        _hostBox.Text = printer.Host ?? "";
-        _portUpDown.Value = Math.Clamp(printer.Port, (int)_portUpDown.Minimum, (int)_portUpDown.Maximum);
-
-        SelectPaperWidth(printer.PaperWidthMm);
-        SelectCodePage(printer.CodePage, printer.EscTIndex);
-
-        _stripAccentsCheck.Checked = printer.StripAccents;
-        _copiesUpDown.Value = Math.Clamp(printer.Copies, (int)_copiesUpDown.Minimum, (int)_copiesUpDown.Maximum);
-    }
-
-    private void SelectPaperWidth(int paperWidthMm)
-    {
-        foreach (var item in _paperWidthCombo.Items)
-        {
-            if (item is PaperWidthOption option && option.Millimeters == paperWidthMm)
-            {
-                _paperWidthCombo.SelectedItem = item;
-                return;
-            }
-        }
-
-        var custom = new PaperWidthOption(paperWidthMm, $"{paperWidthMm}mm (personalizado)");
-        _paperWidthCombo.Items.Add(custom);
-        _paperWidthCombo.SelectedItem = custom;
-    }
-
-    private void SelectCodePage(int codePage, int escTIndex)
-    {
-        foreach (var item in _codePageCombo.Items)
-        {
-            if (item is CodePagePreset preset && preset.CodePage == codePage && preset.EscTIndex == escTIndex)
-            {
-                _codePageCombo.SelectedItem = item;
-                return;
-            }
-        }
-
-        var custom = new CodePagePreset($"CP{codePage} (n={escTIndex}, personalizado)", codePage, escTIndex);
-        _codePageCombo.Items.Add(custom);
-        _codePageCombo.SelectedItem = custom;
-    }
 
     private void ApplyStatus(AgentStatusDto? status, string? error)
     {
@@ -238,10 +204,14 @@ public sealed class SetupForm : Form
             return;
         }
 
+        // Este resumo reflete só a impressora "padrão" (Station == null), não
+        // uma leitura agregada de todas as estações configuradas — mesma
+        // limitação documentada no plano §10/§0 (Fase 3): o pipe ainda não
+        // expõe status por estação, só por config (get-config).
         var connection = status.StreamConnected ? "conectado ao DiskPrato" : "sem conexão com o DiskPrato";
         _summaryLabel.Text =
             $"Pareado, {connection}.\n" +
-            $"Impressora ({status.Transport} — {status.PrinterTarget ?? "não configurada"}): {TranslatePrinterStatus(status.PrinterStatus)}.\n" +
+            $"Impressora padrão ({status.Transport} — {status.PrinterTarget ?? "não configurada"}): {TranslatePrinterStatus(status.PrinterStatus)}.\n" +
             $"{status.QueuedJobs} pedido(s) na fila local.";
     }
 
@@ -254,20 +224,262 @@ public sealed class SetupForm : Form
         _ => "estado desconhecido",
     };
 
-    private void UpdateTransportVisibility()
+    private void AddPrinterSection(PrinterConfigDto? initial)
     {
-        var isNetwork = _transportCombo.SelectedIndex == 1;
-        _spoolerRow.Visible = !isNetwork;
-        _networkRow.Visible = isNetwork;
+        var section = CreatePrinterSection(initial);
+        _printerSections.Add(section);
+        _printersContainer.Controls.Add(section.Card);
     }
 
-    private void RefreshPrinterQueues()
+    private PrinterSectionView CreatePrinterSection(PrinterConfigDto? initial)
     {
-        _spoolerNameCombo.Items.Clear();
+        var stationCombo = new ComboBox { Width = 300, DropDownStyle = ComboBoxStyle.DropDownList };
+        foreach (var option in StationOptions)
+        {
+            stationCombo.Items.Add(option);
+        }
+        stationCombo.SelectedItem = StationOptions.First(o => o.Value == initial?.Station);
+
+        var transportCombo = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
+        transportCombo.Items.Add("Fila do Windows (spooler)");
+        transportCombo.Items.Add("Rede (IP:porta)");
+        transportCombo.SelectedIndex = initial?.Transport == PrinterTransportKind.Network ? 1 : 0;
+
+        var spoolerNameCombo = new ComboBox { Width = 250, DropDownStyle = ComboBoxStyle.DropDown };
         foreach (var name in SpoolerPrinterTransport.EnumPrinterQueues())
         {
-            _spoolerNameCombo.Items.Add(name);
+            spoolerNameCombo.Items.Add(name);
         }
+        if (!string.IsNullOrEmpty(initial?.SpoolerName) && !spoolerNameCombo.Items.Contains(initial.SpoolerName))
+        {
+            spoolerNameCombo.Items.Add(initial.SpoolerName);
+        }
+        spoolerNameCombo.Text = initial?.SpoolerName ?? "";
+        var spoolerRow = LabeledRow("Fila de impressão", spoolerNameCombo);
+
+        var hostBox = new TextBox { Width = 120, Text = initial?.Host ?? "" };
+        var portUpDown = new NumericUpDown { Minimum = 1, Maximum = 65535, Width = 60 };
+        portUpDown.Value = Math.Clamp(initial?.Port ?? 9100, (int)portUpDown.Minimum, (int)portUpDown.Maximum);
+        var networkFields = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        networkFields.Controls.Add(new Label { Text = "IP", AutoSize = true, Margin = new Padding(0, 6, 4, 0) });
+        networkFields.Controls.Add(hostBox);
+        networkFields.Controls.Add(new Label { Text = "Porta", AutoSize = true, Margin = new Padding(10, 6, 4, 0) });
+        networkFields.Controls.Add(portUpDown);
+        var networkRow = LabeledRow("Impressora de rede", networkFields);
+
+        var paperWidthCombo = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
+        paperWidthCombo.Items.Add(new PaperWidthOption(80, "80mm — 48 colunas (fonte A)"));
+        paperWidthCombo.Items.Add(new PaperWidthOption(58, "58mm — 32 colunas (fonte A)"));
+        SelectPaperWidth(paperWidthCombo, initial?.PaperWidthMm ?? 80);
+
+        var codePageCombo = new ComboBox { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
+        codePageCombo.Items.Add(new CodePagePreset("CP850 — Europa Ocidental (padrão Epson, n=2)", 850, 2));
+        codePageCombo.Items.Add(new CodePagePreset("CP860 — Português (n=3)", 860, 3));
+        SelectCodePage(codePageCombo, initial?.CodePage ?? 850, initial?.EscTIndex ?? 2);
+
+        var stripAccentsCheck = new CheckBox
+        {
+            Text = "Remover acentos (fallback se o cupom sair errado)",
+            AutoSize = true,
+            Checked = initial?.StripAccents ?? false,
+        };
+        var copiesUpDown = new NumericUpDown { Minimum = 1, Maximum = 5, Width = 60 };
+        copiesUpDown.Value = Math.Clamp(initial?.Copies ?? 1, (int)copiesUpDown.Minimum, (int)copiesUpDown.Maximum);
+
+        var saveButton = new Button { Text = "Salvar", AutoSize = true };
+        var testPrintButton = new Button { Text = "Imprimir teste", AutoSize = true };
+        var removeButton = new Button { Text = "Remover", AutoSize = true };
+
+        void UpdateTransportVisibility()
+        {
+            var isNetwork = transportCombo.SelectedIndex == 1;
+            spoolerRow.Visible = !isNetwork;
+            networkRow.Visible = isNetwork;
+        }
+        transportCombo.SelectedIndexChanged += (_, _) => UpdateTransportVisibility();
+        UpdateTransportVisibility();
+
+        var card = Section("Impressora", [
+            LabeledRow("Estação", stationCombo),
+            LabeledRow("Transporte", transportCombo),
+            spoolerRow,
+            networkRow,
+            LabeledRow("Papel", paperWidthCombo),
+            LabeledRow("Code page", codePageCombo),
+            Row(stripAccentsCheck),
+            LabeledRow("Cópias", copiesUpDown),
+            ButtonRow(saveButton, testPrintButton, removeButton),
+        ]);
+
+        var section = new PrinterSectionView
+        {
+            Card = card,
+            StationCombo = stationCombo,
+            TransportCombo = transportCombo,
+            SpoolerRow = spoolerRow,
+            SpoolerNameCombo = spoolerNameCombo,
+            NetworkRow = networkRow,
+            HostBox = hostBox,
+            PortUpDown = portUpDown,
+            PaperWidthCombo = paperWidthCombo,
+            CodePageCombo = codePageCombo,
+            StripAccentsCheck = stripAccentsCheck,
+            CopiesUpDown = copiesUpDown,
+            SaveButton = saveButton,
+            TestPrintButton = testPrintButton,
+            RemoveButton = removeButton,
+        };
+
+        saveButton.Click += async (_, _) => await OnSavePrinterAsync(section);
+        testPrintButton.Click += async (_, _) => await OnTestPrintAsync(section);
+        removeButton.Click += async (_, _) => await OnRemovePrinterAsync(section);
+
+        return section;
+    }
+
+    private static void SelectPaperWidth(ComboBox combo, int paperWidthMm)
+    {
+        foreach (var item in combo.Items)
+        {
+            if (item is PaperWidthOption option && option.Millimeters == paperWidthMm)
+            {
+                combo.SelectedItem = item;
+                return;
+            }
+        }
+
+        var custom = new PaperWidthOption(paperWidthMm, $"{paperWidthMm}mm (personalizado)");
+        combo.Items.Add(custom);
+        combo.SelectedItem = custom;
+    }
+
+    private static void SelectCodePage(ComboBox combo, int codePage, int escTIndex)
+    {
+        foreach (var item in combo.Items)
+        {
+            if (item is CodePagePreset preset && preset.CodePage == codePage && preset.EscTIndex == escTIndex)
+            {
+                combo.SelectedItem = item;
+                return;
+            }
+        }
+
+        var custom = new CodePagePreset($"CP{codePage} (n={escTIndex}, personalizado)", codePage, escTIndex);
+        combo.Items.Add(custom);
+        combo.SelectedItem = custom;
+    }
+
+    private static PrinterConfigDto BuildDto(PrinterSectionView section)
+    {
+        var isNetwork = section.TransportCombo.SelectedIndex == 1;
+        var codePage = (CodePagePreset)section.CodePageCombo.SelectedItem!;
+        var paperWidth = (PaperWidthOption)section.PaperWidthCombo.SelectedItem!;
+
+        return new PrinterConfigDto
+        {
+            Station = section.SelectedStation,
+            Transport = isNetwork ? PrinterTransportKind.Network : PrinterTransportKind.Spooler,
+            SpoolerName = isNetwork ? null : section.SpoolerNameCombo.Text.Trim(),
+            Host = isNetwork ? section.HostBox.Text.Trim() : null,
+            Port = (int)section.PortUpDown.Value,
+            PaperWidthMm = paperWidth.Millimeters,
+            CodePage = codePage.CodePage,
+            EscTIndex = codePage.EscTIndex,
+            StripAccents = section.StripAccentsCheck.Checked,
+            Copies = (int)section.CopiesUpDown.Value,
+        };
+    }
+
+    private async Task OnSavePrinterAsync(PrinterSectionView section)
+    {
+        var isNetwork = section.TransportCombo.SelectedIndex == 1;
+        if (isNetwork && string.IsNullOrWhiteSpace(section.HostBox.Text))
+        {
+            LogActivity("Informe o IP da impressora de rede.");
+            return;
+        }
+
+        if (!isNetwork && string.IsNullOrWhiteSpace(section.SpoolerNameCombo.Text))
+        {
+            LogActivity("Escolha a fila de impressão do Windows.");
+            return;
+        }
+
+        var station = section.SelectedStation;
+        if (_printerSections.Any(other => other != section && other.SelectedStation == station))
+        {
+            // set-printer faz upsert por estação (plano §10): salvar duas
+            // seções com a mesma estação faria uma sobrescrever a outra em
+            // silêncio no serviço — melhor barrar aqui do que deixar o
+            // lojista descobrir isso só quando o cupom sair na impressora
+            // errada.
+            LogActivity($"Já existe outra impressora configurada para \"{GetStationLabel(station)}\" — escolha uma estação diferente antes de salvar.");
+            return;
+        }
+
+        var printer = BuildDto(section);
+        section.SaveButton.Enabled = false;
+        try
+        {
+            var response = await _ipc.SetPrinterAsync(printer);
+            LogActivity(
+                response.Ok ? $"Configuração da impressora \"{GetStationLabel(station)}\" salva." : $"Falha ao salvar: {response.Error}",
+                response.Ok);
+            ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
+        }
+        finally
+        {
+            section.SaveButton.Enabled = true;
+        }
+    }
+
+    private async Task OnTestPrintAsync(PrinterSectionView section)
+    {
+        var station = section.SelectedStation;
+        section.TestPrintButton.Enabled = false;
+        try
+        {
+            var response = await _ipc.TestPrintAsync(station);
+            LogActivity(
+                response.Ok ? $"Cupom de teste enviado (\"{GetStationLabel(station)}\")." : $"Falha no teste de impressão: {response.Error}",
+                response.Ok);
+            ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
+        }
+        finally
+        {
+            section.TestPrintButton.Enabled = true;
+        }
+    }
+
+    private async Task OnRemovePrinterAsync(PrinterSectionView section)
+    {
+        var confirm = MessageBox.Show(
+            this, "Remover esta impressora da configuração?", "Confirmar", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes)
+        {
+            return;
+        }
+
+        var station = section.SelectedStation;
+        var response = await _ipc.RemovePrinterAsync(station);
+        LogActivity(
+            response.Ok ? $"Impressora \"{GetStationLabel(station)}\" removida." : $"Falha ao remover: {response.Error}",
+            response.Ok);
+        if (!response.Ok)
+        {
+            return;
+        }
+
+        _printersContainer.Controls.Remove(section.Card);
+        _printerSections.Remove(section);
+
+        if (_printerSections.Count == 0)
+        {
+            // Nunca deixa a tela sem nenhuma seção editável.
+            AddPrinterSection(initial: null);
+        }
+
+        ApplyStatus(response.Status, null);
     }
 
     private async Task OnPairAsync()
@@ -317,65 +529,6 @@ public sealed class SetupForm : Form
         ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
     }
 
-    private async Task OnSaveAsync()
-    {
-        var isNetwork = _transportCombo.SelectedIndex == 1;
-        if (isNetwork && string.IsNullOrWhiteSpace(_hostBox.Text))
-        {
-            LogActivity("Informe o IP da impressora de rede.");
-            return;
-        }
-
-        if (!isNetwork && string.IsNullOrWhiteSpace(_spoolerNameCombo.Text))
-        {
-            LogActivity("Escolha a fila de impressão do Windows.");
-            return;
-        }
-
-        var codePage = (CodePagePreset)_codePageCombo.SelectedItem!;
-        var paperWidth = (PaperWidthOption)_paperWidthCombo.SelectedItem!;
-
-        var printer = new PrinterConfigDto
-        {
-            Transport = isNetwork ? PrinterTransportKind.Network : PrinterTransportKind.Spooler,
-            SpoolerName = isNetwork ? null : _spoolerNameCombo.Text.Trim(),
-            Host = isNetwork ? _hostBox.Text.Trim() : null,
-            Port = (int)_portUpDown.Value,
-            PaperWidthMm = paperWidth.Millimeters,
-            CodePage = codePage.CodePage,
-            EscTIndex = codePage.EscTIndex,
-            StripAccents = _stripAccentsCheck.Checked,
-            Copies = (int)_copiesUpDown.Value,
-        };
-
-        _saveButton.Enabled = false;
-        try
-        {
-            var response = await _ipc.SetPrinterAsync(printer);
-            LogActivity(response.Ok ? "Configuração da impressora salva." : $"Falha ao salvar: {response.Error}", response.Ok);
-            ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
-        }
-        finally
-        {
-            _saveButton.Enabled = true;
-        }
-    }
-
-    private async Task OnTestPrintAsync()
-    {
-        _testPrintButton.Enabled = false;
-        try
-        {
-            var response = await _ipc.TestPrintAsync();
-            LogActivity(response.Ok ? "Cupom de teste enviado." : $"Falha no teste de impressão: {response.Error}", response.Ok);
-            ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
-        }
-        finally
-        {
-            _testPrintButton.Enabled = true;
-        }
-    }
-
     /// <summary><paramref name="success"/> colore a linha: <c>true</c> verde, <c>false</c> vermelho, <c>null</c> neutro (avisos de preenchimento, não são o resultado de uma ação).</summary>
     private void LogActivity(string message, bool? success = null)
     {
@@ -415,13 +568,18 @@ public sealed class SetupForm : Form
         _activityList.ResumeLayout();
     }
 
-    private sealed record PaperWidthOption(int Millimeters, string Label)
-    {
-        public override string ToString() => Label;
-    }
-
     private static readonly Font SectionTitleFont = new("Segoe UI Semibold", 10.5f, FontStyle.Regular);
     private static readonly Color SectionTitleColor = Color.FromArgb(45, 45, 45);
+
+    /// <summary>Título "solto" (fora de um card), usado para agrupar visualmente as N seções dinâmicas de impressora sem outro card à volta delas.</summary>
+    private static Label SectionTitleLabel(string title) => new()
+    {
+        Text = title,
+        AutoSize = true,
+        Font = SectionTitleFont,
+        ForeColor = SectionTitleColor,
+        Margin = new Padding(0, 4, 0, 8),
+    };
 
     // Um GroupBox aqui parece a escolha óbvia, mas AutoSize=true num GroupBox
     // com FlowLayoutPanel interno também AutoSize colapsa a legenda/borda de

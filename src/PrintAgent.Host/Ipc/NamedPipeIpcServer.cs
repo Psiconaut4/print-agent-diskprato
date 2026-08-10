@@ -104,11 +104,12 @@ public sealed class NamedPipeIpcServer(
             return request.Command switch
             {
                 "get-status" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false)),
-                "get-config" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false), controller.ResolveDefaultPrinter()),
+                "get-config" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false), controller.Config.Printers),
                 "pair" => await HandlePairAsync(request, ct).ConfigureAwait(false),
                 "unpair" => await HandleUnpairAsync(ct).ConfigureAwait(false),
                 "set-printer" => await HandleSetPrinterAsync(request, ct).ConfigureAwait(false),
-                "test-print" => await HandleTestPrintAsync(ct).ConfigureAwait(false),
+                "remove-printer" => await HandleRemovePrinterAsync(request, ct).ConfigureAwait(false),
+                "test-print" => await HandleTestPrintAsync(request, ct).ConfigureAwait(false),
                 _ => IpcResponse.Failure($"Comando desconhecido: {request.Command}"),
             };
         }
@@ -154,9 +155,20 @@ public sealed class NamedPipeIpcServer(
         return IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false));
     }
 
-    private async Task<IpcResponse> HandleTestPrintAsync(CancellationToken ct)
+    private async Task<IpcResponse> HandleRemovePrinterAsync(IpcRequest request, CancellationToken ct)
     {
-        var printer = controller.ResolveDefaultPrinter();
+        controller.RemovePrinterConfig(request.Station);
+        return IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false));
+    }
+
+    private async Task<IpcResponse> HandleTestPrintAsync(IpcRequest request, CancellationToken ct)
+    {
+        // request.Station ausente testa a impressora "padrão" (plano §10) —
+        // mesmo comportamento de antes da tela de setup ganhar seções por
+        // estação (Fase 3), preservado pro caso de instalação de estação única.
+        var printer = request.Station is PrintJobTarget station
+            ? controller.ResolvePrinter(station)
+            : controller.ResolveDefaultPrinter();
         var transport = PrinterTransportFactory.Create(printer);
         var bytes = formatter.Format(BuildSyntheticJob(), printer.ToProfile());
 

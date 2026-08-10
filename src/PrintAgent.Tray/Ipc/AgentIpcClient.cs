@@ -30,8 +30,11 @@ public sealed class AgentIpcClient
     public Task<IpcResponseDto> SetPrinterAsync(PrinterConfigDto printer, CancellationToken ct = default) =>
         SendAsync(new IpcRequestDto { Command = "set-printer", Printer = printer }, ct);
 
-    public Task<IpcResponseDto> TestPrintAsync(CancellationToken ct = default) =>
-        SendAsync(new IpcRequestDto { Command = "test-print" }, ct);
+    public Task<IpcResponseDto> RemovePrinterAsync(StationDto? station, CancellationToken ct = default) =>
+        SendAsync(new IpcRequestDto { Command = "remove-printer", Station = station }, ct);
+
+    public Task<IpcResponseDto> TestPrintAsync(StationDto? station = null, CancellationToken ct = default) =>
+        SendAsync(new IpcRequestDto { Command = "test-print", Station = station }, ct);
 
     private static async Task<IpcResponseDto> SendAsync(IpcRequestDto request, CancellationToken ct)
     {

@@ -379,10 +379,52 @@ zero mudança em `AgentConfig`/`Worker`/Tray.
   justifica.
 `dotnet build`/`dotnet test` (72 testes) verdes na solution inteira.
 
-**Fases 1 e 2 de §10 completas; falta só a Fase 3** (UI do Tray por
-estação) — e essa, como já estava no plano original, só faz sentido depois
-que o dashboard (outro repo) validar que lojistas de verdade configuram
-roteamento.
+**Múltiplas impressoras — Fase 3 de §10 feita em 2026-08-10** (adiantada:
+o texto original condicionava esta fase à validação do dashboard no outro
+repo, mas as mudanças de backend estavam sendo feitas em paralelo pelo
+mesmo autor, então fazia sentido preparar o Tray junto em vez de esperar
+uma rodada de coordenação entre repos). `SetupForm` trocou a única seção
+"Impressora" por N seções dinâmicas, uma por estação configurada:
+- Protocolo do pipe finalmente ganhou o formato de lista que a Fase 2
+  tinha adiado por falta de UI que o justificasse: `get-config` devolve
+  `Printers` (lista) em vez de `Printer` (objeto único). `IpcRequest`/
+  `IpcResponseDto` ganharam o campo `Station`, usado por dois comandos
+  novos: `remove-printer` (remove a entrada daquela estação) e
+  `test-print` (agora aceita uma estação opcional — ausente continua
+  testando a impressora "padrão", mesmo comportamento de antes).
+- Cada seção tem um combo "Estação" (as 4 do contrato + "Padrão"), os
+  mesmos campos de sempre (transporte, fila/IP:porta, papel, code page,
+  cópias) e botões Salvar/Imprimir teste/Remover — cada ação fala só com
+  a própria estação daquela seção. Botão "+ Adicionar impressora" no
+  rodapé da lista cria uma seção em branco.
+- Salvar barra duas seções apontando pra mesma estação antes de mandar
+  pro serviço (`set-printer` faz upsert por `Station` — deixar isso
+  acontecer em silêncio faria uma seção sobrescrever a outra sem avisar o
+  lojista, e ele só descobriria quando o cupom saísse na impressora
+  errada). Remover a última seção sempre deixa uma em branco no lugar —
+  nunca uma tela sem nenhum jeito óbvio de configurar de novo.
+- **Limitação conhecida, não corrigida nesta rodada:** o resumo no topo
+  ("Estado") continua mostrando só o status da impressora "padrão"
+  (`Station == null`), não uma leitura agregada de todas as estações — o
+  `AgentStatusSnapshot`/`get-status` não foi estendido para status por
+  estação, só `get-config` virou lista. Numa loja com só "Cozinha"
+  configurada (sem impressora "padrão"), o resumo mostra "não
+  configurada" mesmo com a seção de Cozinha funcionando normalmente. Como
+  a Fase 6 (validação manual do Tray) foi feita antes de existir mais de
+  uma estação, esse cenário específico não foi validado numa sessão
+  desktop real ainda.
+- Tray ainda não tem teste automatizado (natureza da Fase 6/UI) — o
+  checklist manual (`docs/testes-manuais.md` §5) precisa ser reaberto
+  cobrindo múltiplas estações antes de considerar esta fase fechada de
+  verdade: adicionar/salvar/testar/remover mais de uma seção, e o cenário
+  de limitação acima.
+`dotnet build`/`dotnet test` (74 testes) verdes na solution inteira.
+
+**As três fases de §10 estão implementadas no código do agente.** O que
+falta é validação manual (checklist do Tray com múltiplas estações) e a
+integração ponta a ponta contra o backend real, uma vez que o roteamento
+esteja de pé do lado do dashboard/API (mudanças em andamento em paralelo,
+no outro repo).
 
 ---
 

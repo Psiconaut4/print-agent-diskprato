@@ -11,9 +11,27 @@ public enum PrinterTransportKind
     Network = 1,
 }
 
-/// <summary>Espelha <c>PrintAgent.Host.Config.PrinterConfig</c> — mesmos nomes de campo, serialização padrão do <c>System.Text.Json</c> nos dois lados (plano §7.3).</summary>
+/// <summary>
+/// Espelha <c>PrintAgent.Contracts.PrintJobTarget</c> pelo valor numérico do
+/// enum — mesma lógica de <see cref="PrinterTransportKind"/>: o Tray e o
+/// serviço trocam <c>IpcRequest</c>/<c>IpcResponse</c> sem
+/// <c>JsonStringEnumConverter</c> nenhum (plano §7.4/§10), então o wire é
+/// sempre o inteiro do enum, nunca o nome usado no contrato OpenAPI (que só
+/// importa pra serialização de <c>PrintJob</c>, nunca atravessa o pipe).
+/// </summary>
+public enum StationDto
+{
+    Kitchen = 0,
+    Bar = 1,
+    Counter = 2,
+    Customer = 3,
+}
+
+/// <summary>Espelha <c>PrintAgent.Host.Config.PrinterConfig</c> — mesmos nomes de campo, serialização padrão do <c>System.Text.Json</c> nos dois lados (plano §7.3/§10).</summary>
 public sealed class PrinterConfigDto
 {
+    /// <summary><c>null</c> é a estação "padrão" — recebe qualquer job cujo <c>target</c> não tenha impressora própria (plano §10).</summary>
+    public StationDto? Station { get; set; }
     public PrinterTransportKind Transport { get; set; } = PrinterTransportKind.Spooler;
     public string? SpoolerName { get; set; }
     public string? Host { get; set; }
@@ -47,6 +65,9 @@ public sealed class IpcRequestDto
 
     // set-printer
     public PrinterConfigDto? Printer { get; set; }
+
+    /// <summary>remove-printer: estação a remover. test-print: estação a testar (null = impressora "padrão").</summary>
+    public StationDto? Station { get; set; }
 }
 
 /// <summary>Espelha <c>PrintAgent.Host.Ipc.IpcResponse</c>.</summary>
@@ -55,5 +76,7 @@ public sealed class IpcResponseDto
     public bool Ok { get; set; }
     public string? Error { get; set; }
     public AgentStatusDto? Status { get; set; }
-    public PrinterConfigDto? Printer { get; set; }
+
+    /// <summary>Só preenchido em resposta a <c>get-config</c> — uma entrada por estação configurada (plano §10).</summary>
+    public List<PrinterConfigDto>? Printers { get; set; }
 }

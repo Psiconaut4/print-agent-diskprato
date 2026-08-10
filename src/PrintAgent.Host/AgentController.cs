@@ -99,10 +99,10 @@ public sealed class AgentController
     /// Upsert por estação (plano §10): o pipe manda uma <see cref="PrinterConfig"/>
     /// de cada vez (<c>set-printer</c>), com <see cref="PrinterConfig.Station"/>
     /// identificando qual entrada de <see cref="AgentConfig.Printers"/> ela
-    /// substitui — não precisa remandar as outras estações. Tray de hoje
-    /// (Fase 6, sem UI por estação ainda) nunca preenche <c>Station</c>, então
-    /// sempre edita a entrada "padrão" (<c>null</c>), preservando o
-    /// comportamento de impressora única de sempre.
+    /// substitui — não precisa remandar as outras estações. A tela de setup
+    /// (Fase 3 do §10) edita uma seção por estação, cada uma salvando com sua
+    /// própria chamada; a instalação de estação única de sempre continua
+    /// mandando <c>Station = null</c> e editando a entrada "padrão".
     /// </summary>
     public void UpdatePrinterConfig(PrinterConfig printer)
     {
@@ -117,6 +117,17 @@ public sealed class AgentController
             {
                 _config.Printers.Add(printer);
             }
+        }
+
+        _configStore.Save(_config);
+    }
+
+    /// <summary>Remove a entrada de <paramref name="station"/> (plano §10 — Tray "remover estação"). Sem efeito se não existir.</summary>
+    public void RemovePrinterConfig(PrintJobTarget? station)
+    {
+        lock (_lock)
+        {
+            _config.Printers.RemoveAll(p => p.Station == station);
         }
 
         _configStore.Save(_config);
