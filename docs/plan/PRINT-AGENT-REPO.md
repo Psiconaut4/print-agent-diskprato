@@ -305,6 +305,35 @@ localmente, forçando reconexão sem restart. `dotnet build`/`dotnet test`
 backend/desktop reais antes de considerar fechado (ver
 `docs/testes-manuais.md` §2/§5).
 
+**Múltiplas impressoras — Fase 1 de §10 feita em 2026-08-10.** Contrato
+sincronizado para v1.1.0 (`contracts/v1.openapi.json`, `feat(contracts)` em
+2026-08-09): `target` ganhou o valor `bar`, e `PrintJob` ganhou
+`stationLabel`/`printMode` (ambos `x-since: 1.1.0`, opcionais).
+`PrintAgent.Contracts` regenerado via NSwag sem editar `Contracts.g.cs` à
+mão (`dotnet build` regrava a partir do JSON, como sempre). `EscPosFormatter`
+(`PrintAgent.Core`) passou a consumir os dois campos novos:
+- `job.StationLabel`, se presente, imprime como linha centralizada com
+  ênfase logo abaixo do nome/telefone do restaurante — nenhuma tabela local
+  de tradução `target` → texto.
+- `job.PrintMode == Production` corta a seção de preços/pagamento/totais
+  inteira e imprime `{qty}x {nome}` do item em dobro de altura (sem preço),
+  sem somar nada que o backend não mandou pronto. Modificadores nunca
+  imprimem preço nesse modo, mesmo quando `priceCents` existe.
+- Ausência de `printMode` (agente/pedido antigo, sem roteamento) continua
+  bit-a-bit idêntica ao comportamento de hoje — coberto por teste dedicado
+  (`Format_without_stationLabel_or_printMode_matches_receipt_behavior`).
+Dois golden tests novos em `EscPosFormatterTests` (hex de trechos-chave, não
+o cupom inteiro como os dois testes mais antigos — o cupom de production é
+uma variação pequena o bastante do golden de receipt que testar por trecho
+já prova a diferença sem duplicar um segundo golden gigante). `dotnet
+build`/`dotnet test` (62 testes) verdes na solution inteira.
+**Não fazem parte desta fase** (ficam para a Fase 2 de §10, ainda não
+iniciada): `AgentConfig.Printer` → `Printers` (lista), escolha de
+impressora por `target` no `Worker`, e o comando de named pipe
+`set-printers`/`get-config` devolvendo lista. Topologia "um agente por
+estação" (§10, opção 1) já funciona hoje com só a mudança desta fase —
+zero mudança em `AgentConfig`/`Worker`/Tray.
+
 ---
 
 ## 1. O que o agente é
@@ -1061,13 +1090,14 @@ sem saber nada sobre categorias, produtos ou regras de roteamento.
 
 ### Fases sugeridas (espelha as do outro repo)
 
-1. Consumir `stationLabel`/`printMode` no `EscPosFormatter` — funciona pra
-   topologia 1 sem tocar em `AgentConfig`/Tray. Cabe inteiro em
-   `PrintAgent.Core`, com golden-bytes test cobrindo os dois modos.
-2. `AgentConfig.Printers` (lista) + migração automática do formato antigo
-   + escolha de impressora por `target` no `Worker`. Ainda sem UI nova no
-   Tray — configurável só via named pipe/suporte, valida o caminho de
-   dados antes de desenhar a tela.
+1. ✅ **Feito em 2026-08-10.** Consumir `stationLabel`/`printMode` no
+   `EscPosFormatter` — funciona pra topologia 1 sem tocar em
+   `AgentConfig`/Tray. Cabe inteiro em `PrintAgent.Core`, com golden-bytes
+   test cobrindo os dois modos (ver §0).
+2. ⏳ Próximo passo. `AgentConfig.Printers` (lista) + migração automática
+   do formato antigo + escolha de impressora por `target` no `Worker`.
+   Ainda sem UI nova no Tray — configurável só via named pipe/suporte,
+   valida o caminho de dados antes de desenhar a tela.
 3. `SetupForm` com seção por estação. Só vale a pena depois que a Fase 2
    do outro repo (UI de roteamento no dashboard) já validou que lojistas
    reais usam a feature — não faz sentido redesenhar o Tray pra um cenário

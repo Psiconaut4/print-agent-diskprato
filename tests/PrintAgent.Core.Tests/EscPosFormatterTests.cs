@@ -252,6 +252,55 @@ public class EscPosFormatterTests
     }
 
     [Fact]
+    public void Format_production_mode_omits_prices_and_uses_bigger_item_font()
+    {
+        var formatter = new EscPosFormatter();
+        var profile = new PrinterProfile(PaperWidthMm: 80, CodePage: 850, EscTIndex: 2, StripAccents: false, Copies: 1);
+
+        var job = BuildFullDeliveryJob();
+        job.PrintMode = PrintJobPrintMode.Production;
+        job.StationLabel = "Cozinha";
+
+        var hex = Convert.ToHexString(formatter.Format(job, profile));
+
+        // Nenhum valor monetário do pedido aparece: nem preço de item, nem
+        // modificador com preço, nem subtotal/taxa/total/pagamento/troco.
+        Assert.DoesNotContain("35302C3030", hex); // "50,00" (X-Salada)
+        Assert.DoesNotContain("332C3030", hex); // "3,00" (Bacon)
+        Assert.DoesNotContain("537562746F74616C", hex); // "Subtotal"
+        Assert.DoesNotContain("544F54414C", hex); // "TOTAL"
+        Assert.DoesNotContain("44696E686569726F", hex); // "Dinheiro" (payment.Label)
+        Assert.DoesNotContain("54726F636F", hex); // "Troco"
+
+        // stationLabel aparece no cabeçalho, com ênfase (ESC E 1 ... LF ... ESC E 0).
+        Assert.Contains("1B4501436F7A696E68610A1B4500", hex);
+
+        // Nome do item ainda aparece, precedido por GS ! 01 (dobro de altura,
+        // largura normal) e seguido do "desliga" GS ! 00 — sem preço colado.
+        Assert.Contains("1D2101327820582D53616C616461" + "0A" + "1D2100", hex);
+    }
+
+    [Fact]
+    public void Format_without_stationLabel_or_printMode_matches_receipt_behavior()
+    {
+        var formatter = new EscPosFormatter();
+        var profile = new PrinterProfile(PaperWidthMm: 80, CodePage: 850, EscTIndex: 2, StripAccents: false, Copies: 1);
+
+        // Job sem os campos novos (x-since 1.1.0) — cobre agente/pedido
+        // antigo que não passou por roteamento (plano §10).
+        var job = BuildFullDeliveryJob();
+        Assert.Null(job.PrintMode);
+        Assert.Null(job.StationLabel);
+
+        var withoutFields = Convert.ToHexString(formatter.Format(job, profile));
+
+        job.PrintMode = PrintJobPrintMode.Receipt;
+        var explicitReceipt = Convert.ToHexString(formatter.Format(job, profile));
+
+        Assert.Equal(explicitReceipt, withoutFields);
+    }
+
+    [Fact]
     public void Format_multiplies_output_by_copies()
     {
         var formatter = new EscPosFormatter();

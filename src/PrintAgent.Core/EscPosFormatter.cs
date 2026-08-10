@@ -49,6 +49,10 @@ public sealed class EscPosFormatter
         var order = job.Order;
         var columns = profile.Columns;
 
+        // printMode ausente == "receipt" (comportamento de hoje, plano §10):
+        // agentes/pedidos que não passaram por roteamento não têm o campo.
+        var isProduction = job.PrintMode == PrintJobPrintMode.Production;
+
         // Cabeçalho: nome do restaurante centralizado, dobro de altura.
         SetAlign(buffer, Align.Center);
         SetSize(buffer, doubleWidth: true, doubleHeight: true);
@@ -58,6 +62,15 @@ public sealed class EscPosFormatter
         if (!string.IsNullOrWhiteSpace(job.Restaurant.Phone))
         {
             WriteLine(buffer, encoding, profile, job.Restaurant.Phone!, columns);
+        }
+
+        // stationLabel já vem pronto em pt-BR do backend (ex. "Cozinha") —
+        // o agente não mantém tabela de tradução de target -> texto (plano §10).
+        if (!string.IsNullOrWhiteSpace(job.StationLabel))
+        {
+            SetEmphasis(buffer, on: true);
+            WriteLine(buffer, encoding, profile, job.StationLabel!, columns);
+            SetEmphasis(buffer, on: false);
         }
 
         WriteSeparator(buffer, encoding, columns);
@@ -105,20 +118,30 @@ public sealed class EscPosFormatter
 
         WriteSeparator(buffer, encoding, columns);
 
-        // Itens.
+        // Itens. Em production (comanda de cozinha/bar), nome do item em fonte
+        // maior e sem preço — não é recibo fiscal (plano §10).
         foreach (var item in order.Items)
         {
-            WriteMoneyLine(
-                buffer,
-                encoding,
-                profile,
-                $"{item.Quantity}x {item.Name}",
-                FormatMoney(item.TotalPriceCents),
-                columns);
+            if (isProduction)
+            {
+                SetSize(buffer, doubleWidth: false, doubleHeight: true);
+                WriteLine(buffer, encoding, profile, $"{item.Quantity}x {item.Name}", columns);
+                SetSize(buffer, doubleWidth: false, doubleHeight: false);
+            }
+            else
+            {
+                WriteMoneyLine(
+                    buffer,
+                    encoding,
+                    profile,
+                    $"{item.Quantity}x {item.Name}",
+                    FormatMoney(item.TotalPriceCents),
+                    columns);
+            }
 
             foreach (var modifier in item.Modifiers ?? Array.Empty<Modifiers>())
             {
-                if (modifier.PriceCents is int priceCents)
+                if (!isProduction && modifier.PriceCents is int priceCents)
                 {
                     WriteMoneyLine(buffer, encoding, profile, $"   + {modifier.Name}", FormatMoney(priceCents), columns);
                 }
@@ -126,6 +149,7 @@ public sealed class EscPosFormatter
                 {
                     // priceCents == null: modificador entra em pricingMode max/average,
                     // o preço não é atribuível a ele. Imprime sem preço, nunca soma nada.
+                    // Em production, preço nunca é impresso mesmo quando existe.
                     WriteLine(buffer, encoding, profile, $"   + {modifier.Name}", columns);
                 }
             }
@@ -145,36 +169,41 @@ public sealed class EscPosFormatter
             WriteLine(buffer, encoding, profile, $"obs: {order.Notes}", columns);
         }
 
-        WriteSeparator(buffer, encoding, columns);
-
-        // Totais.
-        WriteMoneyLine(buffer, encoding, profile, "Subtotal", FormatMoney(order.SubtotalCents), columns);
-        if (order.DeliveryFeeCents > 0)
+        // Preços/pagamento/totais: comanda de produção não é recibo fiscal,
+        // essa seção inteira não existe nela (plano §10).
+        if (!isProduction)
         {
-            WriteMoneyLine(buffer, encoding, profile, "Taxa de entrega", FormatMoney(order.DeliveryFeeCents), columns);
-        }
+            WriteSeparator(buffer, encoding, columns);
 
-        SetSize(buffer, doubleWidth: false, doubleHeight: true);
-        WriteMoneyLine(buffer, encoding, profile, "TOTAL", FormatMoney(order.TotalCents), columns);
-        SetSize(buffer, doubleWidth: false, doubleHeight: false);
+            // Totais.
+            WriteMoneyLine(buffer, encoding, profile, "Subtotal", FormatMoney(order.SubtotalCents), columns);
+            if (order.DeliveryFeeCents > 0)
+            {
+                WriteMoneyLine(buffer, encoding, profile, "Taxa de entrega", FormatMoney(order.DeliveryFeeCents), columns);
+            }
 
-        WriteSeparator(buffer, encoding, columns);
+            SetSize(buffer, doubleWidth: false, doubleHeight: true);
+            WriteMoneyLine(buffer, encoding, profile, "TOTAL", FormatMoney(order.TotalCents), columns);
+            SetSize(buffer, doubleWidth: false, doubleHeight: false);
 
-        // Pagamento.
-        var payment = order.Payment;
-        WriteLine(buffer, encoding, profile, payment.Label, columns);
-        if (payment.ChangeForCents is int changeForCents)
-        {
-            var changeDue = payment.ChangeDueCents is int due ? FormatMoney(due) : "?";
-            // "->" em vez de U+2192 (→): a seta não existe em CP850/CP860 e o
-            // fallback padrão do .NET a substitui silenciosamente por 0x1A
-            // (SUB) em vez de lançar — mesma armadilha do marcador de combo.
-            WriteLine(
-                buffer,
-                encoding,
-                profile,
-                $"Troco para {FormatMoney(changeForCents)} -> {changeDue}",
-                columns);
+            WriteSeparator(buffer, encoding, columns);
+
+            // Pagamento.
+            var payment = order.Payment;
+            WriteLine(buffer, encoding, profile, payment.Label, columns);
+            if (payment.ChangeForCents is int changeForCents)
+            {
+                var changeDue = payment.ChangeDueCents is int due ? FormatMoney(due) : "?";
+                // "->" em vez de U+2192 (→): a seta não existe em CP850/CP860 e o
+                // fallback padrão do .NET a substitui silenciosamente por 0x1A
+                // (SUB) em vez de lançar — mesma armadilha do marcador de combo.
+                WriteLine(
+                    buffer,
+                    encoding,
+                    profile,
+                    $"Troco para {FormatMoney(changeForCents)} -> {changeDue}",
+                    columns);
+            }
         }
 
         WriteSeparator(buffer, encoding, columns);
