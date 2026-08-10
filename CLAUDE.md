@@ -38,14 +38,31 @@ O que `dotnet test` não cobre (Tray, convivência do spooler com hardware
 real, fila local ponta a ponta contra backend real) está roteirizado em
 `docs/testes-manuais.md`.
 
-## Estado atual (2026-08-08)
+## Estado atual (2026-08-10)
 
-Fases 0–4 e 6 completas (scaffold, Contracts, EscPosFormatter, transportes
-de impressão, cliente HTTP/SSE, Worker Service, Tray/setup). Fases 5 (network
-transport como caminho separado testado contra hardware/servidor fake), 7
-(instalador) e 8 (endurecimento) não iniciadas — ver tabela em
-`docs/plan/PRINT-AGENT-REPO.md §0`. Tray ainda não passou por validação
-manual (próximo passo antes da Fase 7).
+Fases 0–6 completas (scaffold, Contracts, EscPosFormatter, os dois
+transportes de impressão, cliente HTTP/SSE, Worker Service, Tray/setup),
+incluindo a Fase 5 — `NetworkPrinterTransport` está implementado e o
+critério de aceite do plano §8 (impressora de rede falsa que recusa a
+segunda conexão simultânea → retry com backoff, sem falha terminal) é
+coberto por teste automatizado em `PrintAgent.Printing.Tests`. O que falta
+da Fase 5 é só confirmação contra hardware térmico real, que o plano trata
+como opcional.
+
+Também estão implementadas as três fases de roteamento por estação
+(plano §10): contrato v1.1.0 consumido (`stationLabel`/`printMode`),
+`AgentConfig.Printers` como lista por estação, e o Tray editando N
+impressoras.
+
+**Não iniciadas:** Fase 7 (instalador WiX — `installer/` está vazio) e
+Fase 8 (Serilog com rotação, exportar diagnóstico, auto-teste; os TODOs
+estão marcados em `Worker.cs:28` e `Worker.cs:204` — `agentVersion`
+hardcoded e `StatusReport.PrinterState` sempre `Unknown`).
+
+Ver tabela e histórico completo em `docs/plan/PRINT-AGENT-REPO.md §0`. O
+checklist manual do Tray foi inteiro validado em 2026-08-10 (incluindo
+múltiplas estações); a única validação manual que continua pendente é a
+que depende de impressora térmica real — `docs/testes-manuais.md` §2/§4.
 
 **Fila local:** arquivo, não banco. `%ProgramData%\DiskPrato\PrintAgent\queue\`
 com `pending/`, `printed/`, `failed/` — um `.json` por job, escrita atômica

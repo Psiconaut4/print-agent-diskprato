@@ -426,6 +426,203 @@ integração ponta a ponta contra o backend real, uma vez que o roteamento
 esteja de pé do lado do dashboard/API (mudanças em andamento em paralelo,
 no outro repo).
 
+**Validação manual de 2026-08-10 (terceira rodada — sessão desktop real,
+backend de dev + Postgres/Redis reais, restaurante "Forno di Napoli"):**
+
+- **Teste 1 — fluxo ponta a ponta pós-refactor de roteamento (topologia de
+  estação única, §10 Fase 2):** repareado o Host (token antigo tinha sido
+  revogado desde a sessão anterior), pedido real feito pelo cardápio
+  público e aceito pelo dashboard — job apareceu em `queue/pending`,
+  imprimiu e foi confirmado (`acked: true`) sem intervenção manual, dentro
+  do ciclo normal do `AckFlusher`. Confirma que o delegate
+  `ResolvePrinter(target)` introduzido na Fase 2 de §10 não quebrou o
+  caminho mais comum (sem nenhuma estação dedicada configurada).
+- **Teste 1 — `AckFlusher` com job órfão na fila:** revalidação pendente
+  desde a correção de 2026-08-09. Plantei manualmente um
+  `printed/<jobId>.json` com `acked: false` e um `jobId` inexistente no
+  backend, depois fiz um segundo pedido real. Resultado parcial:
+  - **Confirmado:** o job novo e válido foi confirmado (`acked: true`)
+    normalmente mesmo com o órfão presente — a correção de 2026-08-09
+    (`catch (Exception)` genérico em `AckFlusher.SendAsync` que loga e
+    segue pro próximo job) continua funcionando, a rodada de flush não foi
+    abortada.
+  - **Bug novo encontrado (não corrigido):** `AckOutcome.JobNotFound`
+    (backend responde `404` no ack) é **ignorado silenciosamente** em
+    `AckFlusher.SendAsync` — o `switch`/`if` só trata
+    `AckOutcome.Acknowledged`; não há nenhum branch para `JobNotFound` em
+    lugar nenhum do código (`grep` confirma que o valor do enum nunca é
+    lido fora de onde é produzido em `JobsApiClient.AckJobAsync`). Isso
+    contradiz o comentário XML do próprio `AckOutcome`
+    (`JobsApiClient.cs:10-12`): "`NotFound` cobre job não existe mais...
+    404 no ack → descartar da fila local, sem retry". Na prática, o job
+    órfão nunca é descartado nem marcado como falho — `lastAckAttemptAt`/
+    `lastAckError` continuaram `null` depois de mais de 40s (≥ 2 ciclos do
+    `AckFlusher`, que roda a cada 15s), então ele vai ser re-tentado pra
+    sempre, silenciosamente, sem nunca aparecer como erro em lugar nenhum.
+    Corrigir exige um método tipo `JobStore.Discard(jobId)` chamado
+    quando `AckJobAsync` retorna `JobNotFound`, dentro de
+    `AckFlusher.SendAsync`.
+- **Teste 3 (Tray) — checklist base com uma única estação:** revalidado, ok
+  — tela de setup abre legível (layout de 2026-08-09 continua correto),
+  resumo mostra "Pareado, conectado ao DiskPrato. Impressora padrão
+  (Spooler — Generic / Text Only): pronta. 0 pedido(s) na fila local.", e
+  o ícone da bandeja aparece verde, consistente com o estado saudável.
+- **Teste 3 (Tray) — checklist de múltiplas estações e revalidação dos
+  dois bugs de 2026-08-09 (ícone `Unknown`→laranja, reparear sem
+  restart): não completado nesta rodada.** A automação de UI via
+  `SendInput`/`mouse_event` (não havia outra forma de dirigir uma janela
+  WinForms nesta sessão) se mostrou pouco confiável porque outra janela
+  do desktop (uma sessão Claude Code/VS Code diferente, ativa em paralelo)
+  ficava roubando o foreground repetidamente, fazendo cliques/scroll
+  caírem no lugar errado — cheguei a mudar sem querer os combos
+  "Estação"/"Transporte"/"Papel" da seção Padrão sem clicar em "Salvar"
+  (config real em `agent.json` nunca foi tocada, confirmado por leitura
+  direta do arquivo antes e depois). Reiniciei o processo do Tray pra
+  descartar o estado sujo em memória e não fui adiante para não arriscar
+  salvar um valor incorreto sem querer. **Pendente**: adicionar uma
+  segunda estação ("Cozinha"), testar duplicidade bloqueada no cliente,
+  imprimir teste por estação (fila `Generic / Text Only (Cozinha)` já
+  provisionada nesta máquina), persistência com múltiplas seções, remoção,
+  e os dois cenários de bug de 2026-08-09 — precisa de uma sessão desktop
+  sem outra janela concorrendo pelo foreground, ou de um driver de UI
+  Automation em vez de coordenadas de mouse cegas.
+- **Pedido de melhoria novo (Tray, fora de escopo desta correção):** a
+  janela de configuração só tem botão de fechar — não tem minimizar, e não
+  é redimensionável arrastando a borda (uma tentativa de `SetWindowPos`
+  pedindo uma janela mais alta foi ignorada/revertida). Hoje o único jeito
+  de alcançar as seções mais abaixo (estações extras, log de atividade) é
+  rolar dentro do painel interno. Vale trocar `FormBorderStyle` para algo
+  redimensionável e adicionar `MinimizeBox = true`.
+
+**Correções de 2026-08-10 (feitas em resposta à terceira rodada acima):**
+
+- **`AckOutcome.JobNotFound` silencioso — corrigido.** O `if` de
+  `AckFlusher.SendAsync` virou `switch` com um branch para `JobNotFound`,
+  que loga um warning e chama o novo `JobStore.Discard(jobId)` (apaga o
+  `.json` de `printed/` e de `failed/`). É exatamente o que §6.6 e o
+  comentário XML de `AckOutcome` já mandavam fazer: 404 no ack significa
+  que o backend não conhece mais o job, não há nada a confirmar e re-tentar
+  só gera tráfego eterno em silêncio. Optou-se por apagar em vez de mover
+  para `failed/` porque `failed/` é a fila de acks pendentes de job que
+  falhou na impressão — um órfão colocado ali voltaria a ser re-tentado
+  pelo próprio flusher, recriando o loop. Coberto por
+  `tests/PrintAgent.Host.Tests/AckFlusherTests.cs` (primeiro teste
+  automatizado do `AckFlusher`): job órfão em `printed/` e em `failed/`
+  some da fila na primeira rodada, e a segunda rodada não chega a fazer
+  requisição nenhuma.
+- **Janela do Tray fixa/sem minimizar — corrigido.** `SetupForm` passou de
+  `FormBorderStyle.FixedDialog` para `Sizable`, com `MinimizeBox` e
+  `MaximizeBox` habilitados e `MinimumSize = 500x400`. A altura inicial
+  agora é `min(860, altura útil do monitor − 80)` em vez dos 860 fixos —
+  com 860 cravado numa tela menor a janela nascia com a borda inferior
+  fora do monitor, ou seja, impossível de redimensionar pela borda mesmo
+  depois de virar `Sizable`.
+
+**Validação manual de 2026-08-10 (quarta rodada — sessão desktop real,
+backend de dev + Postgres/Redis reais):** a rodada que fechou o checklist
+de múltiplas estações que a terceira não conseguiu completar.
+
+**Método (o que destravou):** em vez de `SendInput`/`mouse_event` com
+coordenadas — que na terceira rodada caía no lugar errado toda vez que
+outra janela roubava o foreground — a tela foi dirigida por **UI
+Automation** (`InvokePattern`/`ValuePattern`/`SelectionItemPattern`), que
+não depende de foreground nem de posição na tela e alcança inclusive
+controles fora da área visível do painel rolável. Duas descobertas de
+método que valem para a próxima rodada:
+- O Windows 11 **não expõe os ícones da bandeja via UIA** (o `Shell_TrayWnd`
+  não devolve descendente nenhum), então não dá para abrir a tela clicando
+  no ícone por UIA. A tela foi aberta mandando `WM_TRAYMOUSEMESSAGE`
+  (`WM_USER+1024`) com `lParam = WM_LBUTTONDBLCLK` para a janela oculta do
+  `NotifyIcon` — equivale ao duplo-clique do usuário, sem depender do shell.
+- Janela **minimizada some da árvore UIA** (`BoundingRectangle` vira
+  `-32000,-32000` e os controles não aparecem). Se um passo falhar com
+  "botão não encontrado", checar `WindowVisualState` antes de suspeitar do
+  código.
+
+**Resultados — roteiro de múltiplas estações (§10 Fase 3), todos passaram:**
+- Seção em branco criada pelo "+ Adicionar impressora" nasce com Estação
+  "Padrão" e campos vazios; salvar uma segunda estação ("Cozinha") não
+  tocou na seção "Padrão" já gravada.
+- **Duplicidade barrada no cliente:** com "Cozinha" já salva, uma segunda
+  seção apontando para "Cozinha" logou o aviso e **não chamou o pipe** —
+  confirmado por hash do `agent.json` idêntico byte a byte antes e depois.
+- **Impressão de teste por estação:** provada de forma direta. A estação
+  "Cozinha" foi configurada como `network` apontando para um listener TCP
+  local em `127.0.0.1:9100`; o teste da "Cozinha" chegou lá (604 bytes,
+  ESC/POS bem formado — `1B 40`, `1B 74 02` = CP850, acentos `ç ã õ é`
+  íntegros) e o teste da "Padrão", disparado logo depois, **não** chegou
+  (foi para o spooler). Desvio deliberado do roteiro, que pedia duas filas
+  `FILE:`: ver "observabilidade do spooler" abaixo.
+- Persistência com duas seções, remoção de uma estação, e remoção da
+  última seção (deixa uma seção em branco no lugar) — todos conforme.
+- **Limitação conhecida do resumo: o comportamento real é diferente do
+  previsto no roteiro.** Com só "Cozinha" configurada (sem "Padrão"), o
+  resumo não mostra "não configurada": mostra os dados da impressora da
+  Cozinha rotulados como "Impressora padrão" (`Impressora padrão (Network
+  — 127.0.0.1): estado desconhecido`), porque `ResolveDefaultPrinter()`
+  cai no "primeira da lista" quando não existe entrada `Station == null`.
+  É mais enganoso do que o roteiro supunha, mas não é crash nem texto
+  incoerente. Corrigir de verdade exige status por estação no `get-status`
+  (fora do escopo da Fase 3).
+
+**Resultados — bugs de 2026-08-09 que faltava revalidar:**
+- **Ícone laranja em estado "Unknown": confirmado visualmente.** Com a
+  impressora padrão apontada para `Fila-Inexistente-XYZ`, o resumo mostrou
+  "estado desconhecido" **em laranja** (captura via `PrintWindow`), e verde
+  no estado saudável. `TrayIcons.For()` (ícone) e `ColorFor()` (label do
+  resumo) chamam o mesmo `StateFor()`, então a cor do texto é prova direta
+  da cor do ícone.
+- **Reparear sem restart: confirmado.** Despareado e pareado de novo pela
+  própria tela (código gerado no dashboard, mesmo restaurante — "Forno di
+  Napoli" — para o balcão não trocar de vínculo), com o `PrintAgent.Host`
+  no mesmo processo o tempo todo (pid inalterado). O resumo voltou sozinho
+  a "Pareado, conectado ao DiskPrato", e o log do Host registra a
+  sequência inteira: `Stream conectado (deviceId=<antigo>)` → `Sem token
+  de dispositivo — aguardando pareamento.` → `Stream conectado
+  (deviceId=<novo>)`. `Worker.RunPairedAsync` de fato reage a
+  `AgentController.TokenChanged`. Efeito colateral esperado do fluxo: cada
+  pareamento cria uma linha nova em `print_agent_devices` (o device antigo
+  não é reaproveitado nem apagado).
+
+**Bug novo encontrado nesta rodada (corrigido):** `Remover` numa seção
+**recém-criada e nunca salva** apagava a impressora já gravada. A seção
+nova nasce com Estação "Padrão"; `OnRemovePrinterAsync` mandava
+`remove-printer` pela estação **do combo**, então desistir de uma seção
+recém-adicionada (o gesto natural de desfazer) levava junto a impressora
+"Padrão" que estava funcionando — silenciosamente, com o log dizendo
+"removida" como se tivesse removido a seção nova. Reproduzido na tela real
+(`agent.json` foi de 1 impressora para `[]`). Correção: `PrinterSectionView`
+ganhou `IsPersisted`/`PersistedStation`; seção não persistida é só
+descartada da tela (sem tocar no serviço), e a persistida é removida pela
+**estação gravada**, não pela do combo — o que também conserta a variante
+"trocar o combo sem salvar e remover", que antes removia a estação errada
+e deixava a gravada órfã na config. Ambas as variantes revalidadas na tela.
+
+**Achado de encoding (corrigido só no ponto óbvio):** o cupom de teste
+saía com `?` no meio de "Cupom de teste — configuração do PrintAgent" — o
+travessão `—` (U+2014) não existe na CP850/CP860 e o encoder cai no
+fallback `?`. Trocado por hífen em `NamedPipeIpcServer.cs`. **O problema
+maior continua aberto:** `EscPosFormatter` não normaliza pontuação Unicode
+antes de codificar, então qualquer `—`, `–`, `"` ou `…` vindo de uma
+observação de pedido real (digitada no celular) imprime como `?`. Vale um
+passe de transliteração de pontuação antes do `Encoding.GetBytes`.
+
+**Observabilidade do spooler nesta máquina (para a próxima rodada não
+perder tempo):** não dá para conferir o que saiu numa fila `FILE:` por
+aqui. `Get-PrintJob` não mostra nada nem com a fila pausada — nem para um
+`Out-Printer` de controle, o que descarta o agente como causa — e o log
+`Microsoft-Windows-PrintService/Operational`, que registraria job e
+impressora de destino, **exige admin para ser habilitado** (`wevtutil sl`
+devolveu "Acesso negado"). Daí a troca por listener TCP para provar
+roteamento.
+
+**Fase 3 de §10 e Fase 6 fechadas.** Com esta rodada o checklist manual do
+Tray está inteiro validado — não sobra nenhum item de UI pendente. O que
+ainda não tem validação é só o que depende de hardware térmico real
+(`docs/testes-manuais.md` §2 e §4), que continua sem equipamento.
+
+**Próximo passo:** Fase 7 (instalador WiX) — `installer/` está vazio.
+
 ---
 
 ## 1. O que o agente é

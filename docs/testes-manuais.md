@@ -101,31 +101,25 @@ encontrados e corrigidos no formato/serialização do `ack` (`printedAt` sem
 `Z`, depois campos opcionais nulos explícitos no JSON) — detalhe completo
 em `docs/plan/PRINT-AGENT-REPO.md §0`.
 
+O fluxo normal foi reconfirmado numa terceira rodada em 2026-08-10, depois
+do refactor de roteamento por estação (Fase 2 do §10): pedido real
+imprimiu e confirmou sozinho, sem nenhuma estação dedicada configurada
+(topologia de agente único). Nessa mesma rodada também foi testado (pela
+primeira vez) o cenário de job órfão na fila de acks — achou um bug novo,
+ver abaixo.
+
 ### O que ainda falta validar
 
-- **`AckFlusher.SendAsync` com job órfão na fila.** Um bug secundário foi
-  encontrado na rodada 2 (uma exceção inesperada de ack — ex. `400` de um
-  job que não existe mais no backend — abortava a rodada de flush inteira,
-  deixando jobs válidos sem tentar) e corrigido em 2026-08-09 (catch
-  genérico que loga e segue pro próximo). **Nunca foi revalidado contra o
-  backend real** depois da correção. Passos: deixe um job órfão em
-  `printed\<jobId>.json` com `acked: false` de uma sessão anterior (ou crie
-  um manualmente com um `jobId` que o backend não reconhece), faça um
-  pedido novo válido, e confirme que o pedido novo é confirmado (`acked:
-  true`) mesmo com o órfão continuando a falhar a cada rodada — sem travar
-  o restante da fila.
-- **Fluxo ponta a ponta depois do refactor de roteamento por estação**
-  (Fase 2 do plano §10, 2026-08-10). `PrintOrchestrator` trocou os
-  parâmetros `PrinterProfile`/`IPrinterTransport` pré-calculados por um
-  delegate resolvido só depois de desserializar o job, e a criação do
-  transporte concreto (`PrinterTransportFactory.Create`) entrou pro mesmo
-  `try` da formatação/envio. É uma mudança de implementação sem mudança de
-  contrato externo, coberta por unit test (`PrintOrchestratorTests`,
-  `AgentControllerTests`) — mas nunca foi exercitada com um pedido real de
-  ponta a ponta desde o refactor. Repita os passos 1–4 acima (fluxo normal)
-  numa instalação de estação única (topologia 1 do §10, sem nenhuma
-  impressora dedicada configurada) só para confirmar que o caminho mais
-  comum continua idêntico ao de antes do refactor.
+Nada neste teste. O bug do ack órfão encontrado na terceira rodada
+(`AckOutcome.JobNotFound` ignorado em silêncio, job re-tentado pra sempre)
+foi corrigido — 404 no ack agora loga e chama `JobStore.Discard(jobId)`,
+com cobertura em `AckFlusherTests` — e **revalidado contra o backend real
+em 2026-08-10 (quarta rodada)**: um `printed\<jobId>.json` plantado à mão
+com um `jobId` inexistente sumiu da pasta no primeiro ciclo do
+`AckFlusher`, com o warning correspondente no log do Host. Na mesma rodada
+a correção ainda limpou sozinha um job que estava travado de verdade desde
+09/08 (`cmsmb9b7d…` em `failed\`, `acked: false`, `lastAckError:
+"timeout"`), que o backend também já não reconhecia.
 
 ---
 
@@ -206,75 +200,94 @@ no "^" de ícones ocultos do Windows).
   nome de dispositivo, clique "Parear". O log de atividade deve mostrar
   "Pareado com sucesso" e o resumo atualizar. Em até 5s (intervalo de
   polling do Tray) o ícone deve refletir se o `Worker` já conectou o SSE.
-- [ ] **Persistência da tela:** feche e reabra a tela de setup — as seções
-  de impressora devem vir reconstruídas a partir do que foi salvo (valida
-  `get-config` devolvendo a lista).
-- [ ] **Despareamento:** clique "Desparear", confirme o diálogo — o
-  resumo volta a "Não pareado".
+- [x] **Persistência da tela** (revalidado em 2026-08-10): feche e reabra a
+  tela de setup — as seções de impressora vêm reconstruídas a partir do que
+  foi salvo (valida `get-config` devolvendo a lista).
+- [x] **Despareamento** (revalidado em 2026-08-10): clique "Desparear",
+  confirme o diálogo — o resumo volta a "Não pareado" e o `device.dat`
+  some do `%ProgramData%`. A configuração de impressoras sobrevive.
+- [x] **Janela redimensionável** (mudança de 2026-08-10, validada na mesma
+  data): a janela expõe minimizar/maximizar/redimensionar
+  (`WindowPattern.CanResize`/`CanMinimize`), mínimo 500x400, e nasce
+  dentro da área útil — nesta tela de 768px de altura ela abriu com 727px
+  em vez dos 860 pedidos, com a borda de baixo visível. Minimizar e
+  restaurar pela barra de título funciona.
 - [ ] **Encerramento:** botão direito no ícone → "Sair" — o ícone some da
   bandeja e o processo do Tray termina; o `Host` continua rodando à parte
   (são processos independentes).
 
-### Roteiro novo — múltiplas estações (Fase 3 do §10, **nunca validado numa sessão desktop real**)
+### Roteiro — múltiplas estações (Fase 3 do §10) — **validado em 2026-08-10**
 
-- [ ] **Impressora padrão:** com a tela recém-aberta (uma seção em
-  branco, Estação = "Padrão"), configure a fila `Generic / Text Only`,
-  clique "Salvar" — log deve mostrar `Configuração da impressora "Padrão"
-  salva.`. "Imprimir teste" nessa seção deve sair um cupom sintético com
-  acentos (`ç ã õ é`).
-- [ ] **Adicionar uma segunda estação:** clique "+ Adicionar impressora",
-  na seção nova selecione Estação = "Cozinha", configure a segunda fila
-  `FILE:` (ou a mesma, se só tiver uma disponível), "Salvar" — log deve
-  mostrar `Configuração da impressora "Cozinha" salva.`, e a seção
-  "Padrão" configurada antes deve continuar intacta (não foi
-  sobrescrita).
-- [ ] **Duplicar estação (validação client-side):** adicione uma terceira
-  seção, selecione Estação = "Cozinha" de novo (mesma da seção anterior) e
-  clique "Salvar" — deve **bloquear no cliente**, sem chamar o pipe:
-  log mostra algo como `Já existe outra impressora configurada para
-  "Cozinha"...`, e a config da seção "Cozinha" original não muda.
-- [ ] **Imprimir teste por estação:** com "Padrão" e "Cozinha" salvas,
-  clique "Imprimir teste" em cada seção separadamente — cada uma deve
-  imprimir na fila daquela seção especificamente (confirme comparando os
-  arquivos de saída das duas filas `FILE:`, se configuradas com nomes
-  diferentes).
-- [ ] **Persistência com múltiplas seções:** feche e reabra a tela — devem
-  aparecer duas seções (Padrão + Cozinha), cada uma com os campos certos
-  pré-preenchidos, na mesma ordem/config salva.
-- [ ] **Remover uma estação:** na seção "Cozinha", clique "Remover",
-  confirme o diálogo — a seção desaparece da tela e o log confirma
-  `Impressora "Cozinha" removida.`. Reabra a tela: só "Padrão" deve
-  restar.
-- [ ] **Remover a última seção:** com só "Padrão" configurada, remova-a
-  também — a tela nunca deve ficar sem nenhuma seção editável (uma seção
-  em branco, Estação = "Padrão", deve aparecer no lugar automaticamente).
-- [ ] **Limitação conhecida a confirmar (não é bug):** configure só uma
-  impressora "Cozinha" (sem nenhuma "Padrão"). O resumo "Estado" no topo
-  da tela deve mostrar a impressora como "não configurada" mesmo com a
-  seção "Cozinha" funcionando normalmente — o resumo hoje só lê o status
-  da impressora "padrão" (`Station == null`), não uma agregação de todas
-  as estações (`get-status` não ganhou granularidade por estação nesta
-  fase, só `get-config`). Confirme que é exatamente esse o comportamento
-  (visualmente confuso, mas esperado) e não algo pior (crash, texto
-  incoerente).
+Todos os itens abaixo passaram numa sessão desktop real (quarta rodada),
+dirigindo a tela por UI Automation. Ficam aqui como roteiro de regressão —
+refaça se mexer em `SetupForm`/`AgentController`.
 
-### Roteiro — bugs corrigidos em 2026-08-09 que nunca foram revalidados
+- [x] **Impressora padrão:** seção em branco → fila `Generic / Text Only`
+  → "Salvar" loga `Configuração da impressora "Padrão" salva.`.
+  "Imprimir teste" sai um cupom sintético com acentos (`ç ã õ é`).
+- [x] **Adicionar uma segunda estação** ("Cozinha"): loga `Configuração da
+  impressora "Cozinha" salva.` e a seção "Padrão" continua intacta.
+- [x] **Duplicar estação (validação client-side):** uma segunda seção
+  apontando pra "Cozinha" **bloqueia no cliente** e não chama o pipe —
+  confirmado por hash do `agent.json` idêntico antes e depois.
+- [x] **Imprimir teste por estação:** cada botão imprime no destino da sua
+  própria seção. Como não dá pra ver a saída de uma fila `FILE:` nesta
+  máquina (ver "Observabilidade" abaixo), a prova foi apontar a "Cozinha"
+  pra um listener TCP local (`network`, `127.0.0.1:9100`): o teste da
+  Cozinha chegou lá (604 bytes de ESC/POS válido) e o da Padrão não.
+- [x] **Persistência com múltiplas seções:** fechar e reabrir reconstrói
+  as duas seções na ordem salva, com os campos certos.
+- [x] **Remover uma estação** e **remover a última seção** (deixa uma
+  seção em branco no lugar, nunca uma tela sem nada editável).
+- [x] **Limitação conhecida — o comportamento real é *diferente* do que
+  este roteiro previa.** Com só "Cozinha" configurada, o resumo **não**
+  diz "não configurada": mostra os dados da impressora da Cozinha
+  rotulados como "Impressora padrão" (`Impressora padrão (Network —
+  127.0.0.1): estado desconhecido`), porque `ResolveDefaultPrinter()` cai
+  no "primeira da lista". Mais enganoso do que se supunha, mas sem crash
+  nem texto incoerente. Só some de vez com status por estação no
+  `get-status`.
 
-Estes dois foram corrigidos em código (`dotnet test` cobre a unidade
-correspondente) mas **nunca confirmados de novo numa sessão desktop
-real**:
+### Roteiro — bugs corrigidos em 2026-08-09
 
-- [ ] **Ícone laranja em estado "Unknown".** Aponte a impressora "padrão"
-  pra um nome de fila inexistente (erro de digitação proposital) — o
-  resumo deve mostrar "estado desconhecido" e o **ícone deve ficar
-  laranja**, não verde. (`TrayIcons.StateFor()` mapeando `"Unknown"` pra
-  `PrinterProblem`.)
-- [ ] **Reparear sem restart.** Com o Host pareado e a sessão SSE já
-  conectada (ícone verde/vermelho), desparear e parear de novo **pela
-  própria tela** (não pelo endpoint admin) — o resumo deve voltar a
-  "conectado ao DiskPrato" sozinho, sem precisar reiniciar o processo do
-  `PrintAgent.Host`. (`Worker.RunPairedAsync` reagindo a
-  `AgentController.TokenChanged`.)
+- [x] **Ícone laranja em estado "Unknown"** — revalidado em 2026-08-10.
+  Com a impressora padrão apontada pra `Fila-Inexistente-XYZ`, o resumo
+  mostrou "estado desconhecido" **em laranja** (verde no estado
+  saudável). `TrayIcons.For()` (ícone) e `ColorFor()` (resumo) chamam o
+  mesmo `StateFor()`, então a cor do texto prova a cor do ícone.
+- [x] **Reparear sem restart** — revalidado em 2026-08-10. Despareado e
+  pareado de novo pela própria tela, com o `PrintAgent.Host` no mesmo
+  processo o tempo todo: o resumo voltou sozinho a "Pareado, conectado ao
+  DiskPrato". O log do Host mostra a sequência inteira —
+  `Stream conectado (deviceId=<antigo>)` → `Sem token de dispositivo —
+  aguardando pareamento.` → `Stream conectado (deviceId=<novo>)` —,
+  confirmando `Worker.RunPairedAsync` reagindo a
+  `AgentController.TokenChanged`. Ao refazer: **tenha o código do
+  dashboard em mãos antes de desparear** (desparear sem ele deixa o
+  agente sem imprimir), e gere o código no **mesmo restaurante** em que o
+  device já está, senão o balcão troca de vínculo. Cada pareamento cria
+  uma linha nova em `print_agent_devices` — as antigas ficam para trás.
+
+### Observabilidade e automação (o que economiza tempo na próxima rodada)
+
+- **Não dá pra conferir a saída de uma fila `FILE:` nesta máquina.**
+  `Get-PrintJob` não mostra job nenhum nem com a fila pausada — nem para
+  um `Out-Printer` de controle, o que descarta o agente como causa — e o
+  log `Microsoft-Windows-PrintService/Operational`, que registraria job e
+  impressora de destino, **precisa de admin** pra ser habilitado
+  (`wevtutil sl` devolve "Acesso negado"). Para provar roteamento, aponte
+  uma das estações pra um listener TCP em `127.0.0.1:9100` e leia os bytes.
+- **Dirija a tela por UI Automation, não por coordenadas de mouse.**
+  `InvokePattern`/`ValuePattern`/`SelectionItemPattern` não dependem de
+  foreground (o problema que travou a terceira rodada) e alcançam
+  controles fora da área visível do painel rolável.
+- **O Windows 11 não expõe os ícones da bandeja via UIA**, então não dá
+  pra abrir a tela clicando no ícone por esse caminho. Mande
+  `WM_TRAYMOUSEMESSAGE` (`WM_USER+1024`, `lParam = WM_LBUTTONDBLCLK`) pra
+  janela oculta do `NotifyIcon` — é o equivalente ao duplo-clique.
+- **Janela minimizada some da árvore UIA** (rect vira `-32000,-32000`). Se
+  um passo falhar com "botão não encontrado", cheque `WindowVisualState`
+  antes de suspeitar do código.
 
 ### Testando o protocolo do pipe sem abrir o Tray
 
