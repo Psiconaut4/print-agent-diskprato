@@ -195,13 +195,115 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
   ícone atual da bandeja por algo mais estilizado (ex. cabeça de robô ou
   motivo de impressão), hoje é só um ícone genérico de cor sólida.
 
-**Próximo passo:** os três bugs acima foram corrigidos nesta sessão
-(commits a seguir) — falta reabrir a validação manual do Tray/fila
-local/SSE (`docs/testes-manuais.md` §2/§3/§5) numa sessão desktop real para
-confirmar as correções contra hardware/backend de verdade antes de seguir
-para a Fase 7 (instalador WiX). `ServiceInstall`/`ServiceControl` do
-serviço, tray no startup do usuário, ACL do `%ProgramData%`, desinstalação
-limpa.
+**Validação manual de 2026-08-09 (segunda rodada — sessão desktop real,
+backend de dev + Postgres/Redis reais, restaurante "Forno di Napoli"):**
+
+- **Teste 2** (fila local/recuperação): a correção do formato de
+  `printedAt` (rodada anterior) não era suficiente — o `ack` de um pedido
+  real continuava voltando `400 Bad Request`. Causa raiz real: `AckRequest`/
+  `ReportStatusDto` têm vários campos opcionais (`errorCode`,
+  `errorMessage`, ...) e o `JsonSerializerOptions` de `JobsApiClient` não
+  tinha `DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull` — o
+  `System.Text.Json` escreve `"errorCode":null` explícito pra todo campo
+  nulo do DTO, mas o schema Zod do backend (`ackJobSchema`/
+  `reportStatusSchema`) usa `.optional()`, não `.nullable()`: aceita a
+  chave ausente, rejeita `null` explícito. Confirmado isolando a validação
+  Zod com/sem os campos nulos via `curl` direto no endpoint. Afetava tanto
+  o ack de job impresso com sucesso (sempre manda `errorCode`/
+  `errorMessage` nulos) quanto `POST /status`.
+  **Corrigido em 2026-08-09:** `JobsApiClient.CreateJsonOptions()` agora
+  seta `DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull`.
+  `dotnet test` (68 testes) segue verde. Confirmado contra o backend real:
+  pedido novo imprime e é confirmado (`acked: true`) em ~15-20s, sem editar
+  nada manualmente.
+  Bug secundário encontrado (não corrigido — fora do escopo desta rodada):
+  `AckFlusher.SendAsync` só trata `OperationCanceledException`,
+  `PrintAgentUnauthorizedException` e `PrintAgentVersionUnsupportedException`
+  — qualquer outra exceção (ex.: `HttpRequestException` de um 400
+  inesperado, como um job órfão que não existe mais no backend) escapa do
+  `foreach` de `AckFlusher.FlushAsync` e aborta a rodada inteira, deixando
+  todo o resto da fila de acks pendente sem tentar. Reproduzido com jobs
+  órfãos deixados por uma sessão de teste anterior bloqueando o ack de um
+  job novo e válido até os órfãos serem removidos manualmente.
+  **Teste de recuperação** (matar o Host com o job em `pending\`, antes de
+  imprimir): passou — apontei a impressora pra uma fila inexistente pra
+  segurar o job em `pending\` com retry agendado, matei o processo, corrigi
+  a impressora e subi o Host de novo; o job saiu de `pending\` e foi
+  impresso **uma única vez**, confirmado depois em `printed\` com
+  `acked: true`.
+  **Teste de retry/falha** (impressora inválida do início ao fim): passou
+  — `attempts` cresceu a cada tentativa (schedule de 60/90/120/150/180s), o
+  job migrou pra `failed\<jobId>.json` com `attempts: 5` e
+  `errorCode: "Not_configured"` preenchidos, dentro da janela de ~10 min
+  esperada.
+- **Teste 3** (SSE contra backend real): reaberto de propósito desta vez
+  (rodada anterior foi reprodução orgânica). Reiniciei o processo do
+  backend de dev com o Host pareado e rodando: o Host detectou a queda e
+  reconectou sozinho sem log de erro nem derrubar o processo — confirma a
+  correção da rodada anterior. Revoguei o dispositivo pelo endpoint admin
+  (`DELETE /api/print-agents/:deviceId`): o Host apagou o token
+  (`Token invalidado (DeviceRevoked) — apagando e parando de reconectar.`)
+  e voltou pro estado "aguardando pareamento", sem loop de erro 401.
+  Nenhum bug novo encontrado — sem alterações de código.
+- **Teste 5** (Tray): a correção de layout do `GroupBox` (rodada anterior)
+  confirmada — a tela de setup abre totalmente legível numa sessão desktop
+  real, com screenshot capturado. Checklist completo:
+  - Sem pareamento: texto "Não pareado — digite o código do lojista
+    abaixo." e ícone cinza, ok.
+  - Pareamento pela própria tela (digitando o código + "Parear"): ok, log
+    de atividade e ícone corretos.
+  - Configurar impressora / Teste de impressão: ok, log de atividade
+    mostra "Configuração da impressora salva." e "Cupom de teste enviado."
+  - Persistência da tela: ok, fechar/reabrir traz os campos pré-preenchidos
+    (`get-config`).
+  - Despareamento: ok, diálogo de confirmação, resumo volta a "Não
+    pareado", ícone volta a cinza.
+  - Encerramento: ok, "Sair" remove o ícone e finaliza só o processo do
+    Tray — o Host continua rodando à parte.
+  - **Estado real da impressora — 2 gaps novos encontrados:**
+    1. Apontar a fila do Windows pra um nome inexistente deixa
+       `PrinterStatus = "Unknown"`. O texto do resumo reflete isso
+       corretamente ("estado desconhecido", não finge "pronta"), mas
+       `TrayIcons.StateFor()` (`PrintAgent.Tray/TrayIcons.cs`) só mapeia
+       `"Offline"`/`"PaperOut"`/`"CoverOpen"` para o ícone laranja
+       (`PrinterProblem`) — `"Unknown"` cai no `default` e o ícone continua
+       **verde**, dando falsa confiança visual numa configuração quebrada
+       (cenário realista: erro de digitação no nome da fila). Não
+       corrigido nesta rodada.
+    2. Desparear/parear pela tela (ou pelo pipe) **enquanto o Worker já
+       tem uma sessão SSE pareada ativa** não tem efeito imediato: o loop
+       `RunPairedAsync` (`Worker.cs`) só é reiniciado por uma exceção ou
+       por `TokenInvalidated` (evento `device:revoked` vindo do próprio
+       SSE) — um `unpair`/`pair` local via named pipe não cancela a tarefa
+       em execução. Resultado: depois de reparear pela tela, o resumo
+       fica preso em "Pareado, sem conexão com o DiskPrato." (vermelho)
+       indefinidamente (esperei mais de 1 min), e só um restart do
+       `PrintAgent.Host` reconecta de fato com o novo pareamento —
+       confirmado revertendo com restart, que resolveu na hora. Diferente
+       da revogação remota (testada no Teste 3, que funciona porque o
+       backend manda `device:revoked` pelo próprio SSE). Não corrigido
+       nesta rodada — precisa de um jeito do `Worker` observar troca de
+       pareamento local (ex.: token/deviceId mudou) e cancelar a sessão
+       atual, não só reagir a eventos vindos do servidor.
+  Pedido de melhoria do ícone (trocar por algo mais estilizado) segue em
+  aberto, fora de escopo.
+
+**Próximo passo:** os bugs de formato de `printedAt`/reconexão SSE/layout
+do Tray (rodada anterior) e o de serialização de campos nulos no ack
+(rodada atual) estão corrigidos e confirmados contra backend/desktop reais.
+Os três problemas restantes da rodada atual (`AckFlusher` abortando a fila
+inteira num erro inesperado de ack; ícone não ficando laranja em estado
+"Unknown"; pareamento local não reconectando sem restart do Host) também
+foram corrigidos em 2026-08-09 — `AckFlusher.SendAsync` ganhou um
+`catch (Exception)` genérico que segue pro próximo job em vez de abortar a
+rodada; `TrayIcons.StateFor()` passou a mapear `"Unknown"` pro ícone
+laranja; `Worker.RunPairedAsync` passou a assinar
+`AgentController.TokenChanged` (evento que já existia mas não tinha
+listener) e cancela a sessão SSE atual quando o token/pareamento muda
+localmente, forçando reconexão sem restart. `dotnet build`/`dotnet test`
+(60 testes) verdes — **falta revalidação manual** dos três cenários contra
+backend/desktop reais antes de considerar fechado (ver
+`docs/testes-manuais.md` §2/§5).
 
 ---
 
@@ -862,10 +964,121 @@ Compatibilidade, do lado do agente:
 
 ---
 
-## 10. Fora de escopo na v1
+## 10. Múltiplas impressoras (roteamento de comandas) — planejado
 
-- Múltiplas impressoras por loja (cozinha + balcão). O contrato já tem
-  `target` reservado para isso; a implementação fica para depois.
+**Planejado, não implementado.** Desenho completo do lado
+backend/dashboard (regra de roteamento por categoria/produto, campo
+`station` no dispositivo, contrato) está em
+`docs/planejamento-features/PRINT-AGENT.md` no repo do DiskPrato — esta
+seção cobre só a parte que muda **aqui**, no agente.
+
+### Duas topologias, dois níveis de esforço
+
+1. **Um agente por estação** (PC da cozinha pareado como dispositivo
+   "Cozinha", PC do balcão pareado como "Balcão", cada um com sua própria
+   impressora) — **zero mudança de código no agente**. O backend já manda
+   um `PrintJob` por dispositivo hoje (`createPrintJobsForOrder` itera os
+   devices); o roteamento vira, do ponto de vista do agente, só "o job que
+   chegou tem menos itens e um `target` diferente" — o `EscPosFormatter`
+   já recebe `PrintOrder.items` pronto, não sabe nem precisa saber que foi
+   filtrado no backend. O único trabalho é passar a **consumir** os campos
+   novos do contrato (abaixo) em vez de ignorá-los.
+2. **Um agente, várias impressoras** (uma máquina só no balcão com
+   impressora de comanda de cozinha e impressora de recibo lado a lado) —
+   exige as mudanças descritas no resto desta seção.
+
+### Contrato: parar de ignorar `target`, consumir campos novos
+
+Hoje `PrintJobTarget` já é desserializado (`PrintJob.Target`) mas nunca
+lido em lugar nenhum do `Host` — só o job sintético de teste hardcoda
+`Target = PrintJobTarget.Kitchen` (`NamedPipeIpcServer.cs`). Passa a
+importar pra valer:
+
+- `stationLabel` (novo campo string opcional, nome amigável tipo
+  "Cozinha"/"Bar" pronto em pt-BR) — usado no cabeçalho do cupom em vez de
+  traduzir o enum `target` localmente. Evita o agente carregar uma tabela
+  de tradução que fica desatualizada sem reinstalar quando o backend
+  adicionar uma estação nova.
+- `printMode: "production" | "receipt"` (novo campo string opcional,
+  default `"receipt"` se ausente — compatível com o formato de cupom atual
+  quando o campo não vier, o que cobre qualquer agente antigo ou pedido
+  que não passou por roteamento). `EscPosFormatter` ganha um branch: em
+  `production`, omite a seção de preços/pagamento/totais e aumenta a fonte
+  do nome do item — é uma comanda de produção, não um recibo fiscal.
+- **Enum desconhecido em `target` continua não-fatal** (já é a regra hoje,
+  §9) — uma estação nova que o backend inventou e este agente ainda não
+  conhece cai no branch padrão, imprime como cupom genérico em vez de
+  falhar.
+
+### `AgentConfig.Printer` (singular) → `AgentConfig.Printers` (por estação)
+
+Mudança de maior risco desta seção, só necessária pra topologia 2:
+
+- `PrinterConfig` ganha um campo `Station` (mesmo enum do contrato).
+  `AgentConfig.Printer` (uma instância) vira `AgentConfig.Printers`
+  (lista). **Migração automática e silenciosa** em
+  `AgentConfigStore.Load()`: se o `agent.json` existente tem o campo
+  singular antigo (formato de hoje) e não tem o plural novo, envolve numa
+  lista de um elemento com `Station = null` ("estação padrão, recebe
+  tudo") — nenhuma instalação em produção quebra ao atualizar, e nenhuma
+  delas *precisa* reconfigurar nada pra continuar funcionando exatamente
+  como hoje.
+- Escolha da impressora por job, em `Worker.HandleSseJobAsync`: procura em
+  `Printers` uma entrada com `Station == job.Target`; se não achar, cai na
+  entrada com `Station == null` (a "padrão"); se não existir nem essa,
+  usa a primeira da lista. Nunca descarta um job por falta de impressora
+  configurada pra aquela estação especificamente — mesma filosofia de
+  "nunca finge que está tudo bem, mas também nunca perde o pedido" que já
+  rege o resto do agente (§5.3 do plano original).
+- Named pipe (`NamedPipeIpcServer`): `set-printer` (singular, um
+  `PrinterConfig`) vira `set-printers` (lista) — ou mantém `set-printer`
+  mas com um campo `Station` no payload que faz upsert só daquela entrada
+  da lista, sem precisar remandar as outras (API mais ergonômica pro Tray,
+  que edita uma estação de cada vez). `get-config`/`get-status` passam a
+  devolver a lista inteira, não um objeto só.
+- `PrintAgent.Tray` / `SetupForm`: a seção "Impressora" (hoje uma só) vira
+  uma lista de seções, uma por estação configurada, com um jeito de
+  adicionar/remover estação. É o maior redesenho de UI desta feature —
+  cada seção repete os mesmos campos de hoje (transporte, fila/IP:porta,
+  papel, code page, cópias) mais o seletor de `Station`. Fila local
+  (`JobStore`) não muda: continua um `.json` por job, indiferente a quantas
+  impressoras existem — a escolha de impressora acontece só no momento de
+  tentar imprimir, não na hora de gravar o job na fila.
+
+### Por que não dividir o job no agente
+
+Alternativa descartada: mandar o pedido inteiro num job só e deixar o
+agente decidir localmente quais itens saem em qual impressora (agente
+replica a regra de roteamento). Rejeitada porque duplica no cliente uma
+regra de negócio que já vive no backend (categoria/produto → estação), e
+quebra o modelo de ack por job: se a impressora da cozinha estiver sem
+papel mas a do balcão imprimir com sucesso, o contrato de hoje (`ack`
+idempotente por `jobId`, retry local por job) não tem como expressar
+"metade do job deu certo". Splitting no backend (um `PrintJob`/`jobId` por
+combinação dispositivo×estação-com-item) mantém o mesmo modelo de
+ack/retry que já existe, só com granularidade menor — o agente continua
+sem saber nada sobre categorias, produtos ou regras de roteamento.
+
+### Fases sugeridas (espelha as do outro repo)
+
+1. Consumir `stationLabel`/`printMode` no `EscPosFormatter` — funciona pra
+   topologia 1 sem tocar em `AgentConfig`/Tray. Cabe inteiro em
+   `PrintAgent.Core`, com golden-bytes test cobrindo os dois modos.
+2. `AgentConfig.Printers` (lista) + migração automática do formato antigo
+   + escolha de impressora por `target` no `Worker`. Ainda sem UI nova no
+   Tray — configurável só via named pipe/suporte, valida o caminho de
+   dados antes de desenhar a tela.
+3. `SetupForm` com seção por estação. Só vale a pena depois que a Fase 2
+   do outro repo (UI de roteamento no dashboard) já validou que lojistas
+   reais usam a feature — não faz sentido redesenhar o Tray pra um cenário
+   que ninguém configurou ainda.
+
+---
+
+## 11. Fora de escopo na v1
+
+- Nome de estação customizado pelo lojista (texto livre além do enum
+  fixo `kitchen`/`bar`/`counter`/`customer`) — ver §10.
 - Auto-update. Primeira versão é instalação manual pelo `.msi`.
 - Gaveta de dinheiro (`ESC p`) e impressão de QR code.
 - Linux/ARM (Raspberry Pi na cozinha). O deployment self-contained do .NET

@@ -178,6 +178,46 @@ manual (§2) precisa ser refeito do zero** — incluindo os passos de
 recuperação e retry/falha que não chegaram a rodar da vez passada — para
 confirmar contra o backend real.
 
+### Resultado (2026-08-09, segunda rodada)
+
+**Falhou de novo, causa raiz diferente.** A correção do `printedAt` não era
+suficiente: o ack de um pedido real continuava voltando `400 Bad Request`.
+Causa raiz: `AckRequest`/`ReportStatusDto` têm campos opcionais
+(`errorCode`, `errorMessage`, ...) e o `JsonSerializerOptions` de
+`JobsApiClient` não tinha `DefaultIgnoreCondition =
+JsonIgnoreCondition.WhenWritingNull` — o `System.Text.Json` escreve
+`"errorCode":null` explícito pra todo campo nulo, mas o schema Zod do
+backend usa `.optional()` (aceita a chave ausente, rejeita `null`
+explícito). Confirmado isolando a validação Zod via `curl` direto no
+endpoint, com e sem os campos nulos no corpo.
+
+**Corrigido em 2026-08-09:** `JobsApiClient.CreateJsonOptions()` agora seta
+`DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull`. `dotnet
+test` (68 testes) segue verde. Confirmado contra o backend real (restaurante
+"Forno di Napoli", backend de dev): pedido novo imprime e é confirmado
+(`acked: true`) em ~15-20s.
+
+Depois da correção, os três passos deste teste passaram:
+- **Fluxo normal** (pending → printed → acked): ok, sem intervenção manual.
+- **Recuperação** (matar o Host com o job em `pending\`, antes de
+  imprimir): ok — apontei a impressora pra uma fila inexistente pra segurar
+  o job em `pending\` com retry agendado, matei o processo, corrigi a
+  impressora e subi o Host de novo; o job saiu de `pending\` e foi impresso
+  **uma única vez**, confirmado em `printed\` com `acked: true`.
+- **Retry/falha** (impressora inválida do início ao fim): ok — `attempts`
+  cresceu a cada tentativa (schedule 60/90/120/150/180s), o job migrou pra
+  `failed\<jobId>.json` com `attempts: 5` e `errorCode: "Not_configured"`
+  preenchidos, dentro da janela de ~10 min esperada.
+
+**Bug secundário encontrado, não corrigido:** `AckFlusher.SendAsync` só
+trata `OperationCanceledException`, `PrintAgentUnauthorizedException` e
+`PrintAgentVersionUnsupportedException` — qualquer outra exceção (ex.: um
+`HttpRequestException` de 400 inesperado, como um job órfão que não existe
+mais no backend) escapa do `foreach` em `AckFlusher.FlushAsync` e aborta a
+rodada inteira, deixando o resto da fila de acks sem tentar. Reproduzido
+com jobs órfãos de uma sessão anterior bloqueando o ack de um job novo e
+válido até serem removidos manualmente. Candidato a fix futuro.
+
 ---
 
 ## 3. Cliente HTTP/SSE contra o backend real (Fase 3) — smoke opcional
@@ -215,6 +255,22 @@ host). `dotnet test` cobre o caso de reset de conexão
 (`SseStreamClientTests.ConnectionReset_DuringRead_ReconnectsInsteadOfThrowing`).
 **Este teste manual (§3) precisa ser refeito** — derrubar a rede com o Host
 pareado e rodando — para confirmar contra condições de rede reais.
+
+### Resultado (2026-08-09, segunda rodada)
+
+**Passou nos dois cenários**, reaberto de propósito desta vez (a rodada
+anterior foi reprodução orgânica):
+
+- Reiniciei o processo do backend de dev com o Host pareado e rodando: o
+  Host detectou a queda e reconectou sozinho (novo log "Stream conectado"),
+  sem erro nem derrubar o processo — confirma a correção.
+- Revoguei o dispositivo pelo endpoint admin
+  (`DELETE /api/print-agents/:deviceId`): o Host apagou o token
+  (`Token invalidado (DeviceRevoked) — apagando e parando de reconectar.`)
+  e voltou pro estado "Sem token de dispositivo — aguardando pareamento.",
+  sem loop de erro 401.
+
+Nenhum bug novo encontrado neste teste — sem alterações de código.
 
 ---
 
@@ -361,6 +417,90 @@ como é UI WinForms sem cobertura de teste automatizado (natureza da Fase
 6), **todo o checklist desta seção §5 precisa ser refeito do zero** numa
 sessão desktop real para confirmar visualmente. Pedido de melhoria do
 ícone não foi endereçado (fora de escopo desta correção).
+
+### Resultado (2026-08-09, segunda rodada)
+
+**Layout confirmado corrigido** — a tela de setup abre totalmente legível
+numa sessão desktop real (screenshot capturado via automação de tela).
+Checklist completo, item a item:
+
+- [x] **Sem pareamento:** "Não pareado — digite o código do lojista
+  abaixo." e ícone cinza na bandeja, ok.
+- [x] **Pareamento:** digitando o código gerado pelo endpoint admin +
+  "Parear" (pela própria tela, não pelo pipe) — ok, log de atividade e
+  ícone corretos depois que o stream conecta.
+- [x] **Configurar impressora:** ok, log de atividade mostra "Configuração
+  da impressora salva."
+- [x] **Teste de impressão:** ok, log mostra "Cupom de teste enviado.", sem
+  erro.
+- [x] **Persistência da tela:** ok, fechar/reabrir traz os campos
+  pré-preenchidos (`get-config`) — inclusive depois de eu ter mudado sem
+  querer o campo "Papel" com o scroll do mouse sobre o combo (revertido
+  antes de seguir; comportamento padrão de `ComboBox` do WinForms, não é
+  bug deste app).
+- [x] **Estado real da impressora:** parcial — ver gaps abaixo.
+- [x] **Despareamento:** ok, diálogo de confirmação ("Desparear este
+  dispositivo? Será preciso um novo código do lojista..."), resumo volta a
+  "Não pareado", ícone volta a cinza.
+- [x] **Encerramento:** ok, "Sair" pelo menu de contexto do ícone remove o
+  ícone e finaliza só o processo do Tray — o Host continua rodando à parte,
+  confirmado checando o processo depois.
+
+**Dois gaps novos encontrados, não corrigidos:**
+
+1. **Ícone não reflete estado "Unknown" da impressora.** Apontar a fila do
+   Windows pra um nome inexistente deixa `PrinterStatus = "Unknown"`. O
+   texto do resumo reflete isso corretamente ("estado desconhecido", não
+   finge "pronta") — mas `TrayIcons.StateFor()`
+   (`src/PrintAgent.Tray/TrayIcons.cs`) só mapeia
+   `"Offline"`/`"PaperOut"`/`"CoverOpen"` pro ícone laranja
+   (`PrinterProblem`); `"Unknown"` cai no `default` e o ícone continua
+   **verde** — falsa confiança visual numa configuração quebrada (cenário
+   realista: erro de digitação no nome da fila no balcão).
+2. **Pareamento local não reconecta sem restart do Host.** Desparear e
+   parear de novo pela tela (ou pelo pipe) **enquanto o Worker já tem uma
+   sessão SSE pareada ativa** não tem efeito imediato: `RunPairedAsync`
+   (`src/PrintAgent.Host/Worker.cs`) só reinicia por exceção ou por
+   `TokenInvalidated` (evento `device:revoked` vindo do próprio SSE) — um
+   `unpair`/`pair` local via named pipe não cancela a sessão em execução.
+   Resultado: depois de reparear pela tela, o resumo fica preso em
+   "Pareado, sem conexão com o DiskPrato." (vermelho) indefinidamente
+   (esperei mais de 1 min) — só um restart do `PrintAgent.Host` reconecta
+   de fato com o novo pareamento (confirmado: reiniciar resolveu na hora).
+   Diferente da revogação remota (§3, que funciona porque o backend manda
+   `device:revoked` pelo próprio SSE).
+
+Pedido de melhoria do ícone (trocar por algo mais estilizado) segue em
+aberto, fora de escopo desta rodada.
+
+### Correções (2026-08-09, terceira rodada)
+
+Os três problemas relatados acima foram corrigidos:
+
+- **`AckFlusher` engolindo a fila inteira num erro inesperado** (§2, bug
+  secundário): `AckFlusher.SendAsync` (`src/PrintAgent.Host/AckFlusher.cs`)
+  agora tem um `catch (Exception ex)` genérico depois dos casos já tratados
+  — loga, registra a falha via `RecordAckAttemptFailure` e retorna `true`
+  para seguir pro próximo job da rodada, em vez de abortar tudo. Cancelamento
+  real de shutdown continua propagando normalmente (checado via
+  `ct.IsCancellationRequested` antes do catch genérico).
+- **Ícone não fica laranja em `PrinterStatus = "Unknown"`** (gap 1):
+  `TrayIcons.StateFor()` agora inclui `"Unknown"` junto de
+  `"Offline"/"PaperOut"/"CoverOpen"` no mapeamento para
+  `AgentVisualState.PrinterProblem`.
+- **Pareamento local não reconecta sem restart** (gap 2): `Worker.RunPairedAsync`
+  (`src/PrintAgent.Host/Worker.cs`) agora assina o evento
+  `AgentController.TokenChanged` (já existia, disparado em
+  `PairAsync`/`Unpair`/`InvalidateToken`, mas nada o escutava) e cancela o
+  `linkedCts` da sessão quando ele dispara — a sessão SSE atual encerra
+  de forma limpa e o loop externo do `Worker` reabre com o token/config
+  novos, sem depender de exceção nem de restart do processo.
+
+`dotnet build` (0 avisos, 0 erros) e `dotnet test` (60 testes) confirmados
+verdes. **Revalidação manual ainda pendente** contra backend/desktop reais
+para os três cenários: job órfão bloqueando ack de jobs válidos, ícone
+laranja com fila apontada pra nome inexistente, e reparear pela tela com
+sessão SSE ativa sem precisar reiniciar o Host.
 
 ---
 
