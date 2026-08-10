@@ -107,12 +107,19 @@ public sealed class Worker(
 
         var retryLoopTask = RunLocalRetryLoopAsync(jobsApi, ackFlusher, linkedCts.Token);
 
+        // Pareamento/despareamento local (tela/pipe) muda o token por fora
+        // deste loop — sem isso, a sessao SSE em andamento continua presa
+        // ao token antigo ate cair por conta propria (plano §7.4/Worker.cs).
+        void OnTokenChanged() => linkedCts.Cancel();
+        controller.TokenChanged += OnTokenChanged;
+
         try
         {
             await sse.RunAsync(linkedCts.Token).ConfigureAwait(false);
         }
         finally
         {
+            controller.TokenChanged -= OnTokenChanged;
             controller.StreamConnected = false;
             linkedCts.Cancel();
             await RunSafelyAsync(() => retryLoopTask, "loop de retry local (encerramento)").ConfigureAwait(false);

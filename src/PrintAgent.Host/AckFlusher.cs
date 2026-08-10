@@ -90,6 +90,19 @@ public sealed class AckFlusher(JobStore jobStore, JobsApiClient jobsApi, ILogger
             logger.LogWarning("Ack de {JobId} nao pode ser enviado: versao do agente nao suportada.", jobId);
             return false;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Erro inesperado (ex.: 400 de um job orfao que o backend nao
+            // reconhece mais) nao pode derrubar o resto da rodada — os
+            // demais acks pendentes sao independentes deste job.
+            logger.LogWarning(ex, "Ack de {JobId} falhou de forma inesperada; tentando de novo na proxima rodada.", jobId);
+            jobStore.RecordAckAttemptFailure(jobId, "unexpected-error");
+            return true;
+        }
     }
 
     private static PrinterErrorCode? ParseErrorCode(string? errorCode) =>
