@@ -1,3 +1,4 @@
+using PrintAgent.Contracts;
 using PrintAgent.Host.Config;
 using PrintAgent.Host.Security;
 using PrintAgent.Host.Storage;
@@ -94,15 +95,54 @@ public sealed class AgentController
         TokenChanged?.Invoke();
     }
 
+    /// <summary>
+    /// Upsert por estação (plano §10): o pipe manda uma <see cref="PrinterConfig"/>
+    /// de cada vez (<c>set-printer</c>), com <see cref="PrinterConfig.Station"/>
+    /// identificando qual entrada de <see cref="AgentConfig.Printers"/> ela
+    /// substitui — não precisa remandar as outras estações. Tray de hoje
+    /// (Fase 6, sem UI por estação ainda) nunca preenche <c>Station</c>, então
+    /// sempre edita a entrada "padrão" (<c>null</c>), preservando o
+    /// comportamento de impressora única de sempre.
+    /// </summary>
     public void UpdatePrinterConfig(PrinterConfig printer)
     {
         lock (_lock)
         {
-            _config.Printer = printer;
+            var index = _config.Printers.FindIndex(p => p.Station == printer.Station);
+            if (index >= 0)
+            {
+                _config.Printers[index] = printer;
+            }
+            else
+            {
+                _config.Printers.Add(printer);
+            }
         }
 
         _configStore.Save(_config);
     }
+
+    /// <summary>
+    /// Escolhe a impressora para um job de destino <paramref name="target"/>
+    /// (plano §10): entrada dedicada àquela estação; senão a "padrão"
+    /// (<c>Station == null</c>); senão a primeira da lista; senão uma config
+    /// vazia (deixa o job em retry por "não configurado" em vez de derrubar o
+    /// processamento) — nunca descarta um job por falta de impressora.
+    /// </summary>
+    public PrinterConfig ResolvePrinter(PrintJobTarget target)
+    {
+        var printers = Config.Printers;
+        return printers.FirstOrDefault(p => p.Station == target)
+            ?? ResolveDefaultPrinter(printers);
+    }
+
+    /// <summary>Impressora usada pelo pipe (status/config/teste) enquanto o Tray não edita por estação (Fase 3 do §10).</summary>
+    public PrinterConfig ResolveDefaultPrinter() => ResolveDefaultPrinter(Config.Printers);
+
+    private static PrinterConfig ResolveDefaultPrinter(IReadOnlyList<PrinterConfig> printers) =>
+        printers.FirstOrDefault(p => p.Station is null)
+        ?? printers.FirstOrDefault()
+        ?? new PrinterConfig();
 
     /// <summary>
     /// Inclui uma leitura best-effort do estado físico da impressora (plano
@@ -113,14 +153,14 @@ public sealed class AgentController
     /// </summary>
     public async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken ct)
     {
-        var config = Config;
+        var printer = ResolveDefaultPrinter();
         return new AgentStatusSnapshot(
             IsPaired,
             StreamConnected,
             _jobStore.GetQueueLength(),
-            config.Printer.Transport.ToString(),
-            config.Printer.Transport == PrinterTransportKind.Spooler ? config.Printer.SpoolerName : config.Printer.Host,
-            (await QueryPrinterStatusAsync(config.Printer, ct).ConfigureAwait(false)).ToString());
+            printer.Transport.ToString(),
+            printer.Transport == PrinterTransportKind.Spooler ? printer.SpoolerName : printer.Host,
+            (await QueryPrinterStatusAsync(printer, ct).ConfigureAwait(false)).ToString());
     }
 
     private static async Task<PrinterStatus> QueryPrinterStatusAsync(PrinterConfig printer, CancellationToken ct)

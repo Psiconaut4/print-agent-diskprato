@@ -37,9 +37,16 @@ public sealed class PrintOrchestrator
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>
+    /// Resolve qual impressora usar para um job de destino <paramref name="target"/>
+    /// (plano §10) — chamado só depois de decidido que o job vai ser
+    /// formatado/enviado, para que uma estação sem impressora configurada vire
+    /// retry local em vez de uma exceção não tratada.
+    /// </summary>
+    public delegate (PrinterProfile Profile, IPrinterTransport Transport) ResolvePrinter(PrintJobTarget target);
+
     /// <summary>Job recém-chegado (stream ou <c>jobs/pending</c>). Grava antes de tentar imprimir (plano §7.1).</summary>
-    public async Task<PrintOutcome> HandleNewJobAsync(
-        PrintJob job, PrinterProfile profile, IPrinterTransport transport, CancellationToken ct)
+    public async Task<PrintOutcome> HandleNewJobAsync(PrintJob job, ResolvePrinter resolvePrinter, CancellationToken ct)
     {
         if (_jobStore.IsAlreadyHandled(job.JobId))
         {
@@ -47,12 +54,11 @@ public sealed class PrintOrchestrator
         }
 
         _jobStore.RecordReceived(job.JobId, JsonSerializer.Serialize(job, JsonOptions), _timeProvider.GetUtcNow());
-        return await AttemptAsync(job, profile, transport, attemptNumber: 1, ct).ConfigureAwait(false);
+        return await AttemptAsync(job, resolvePrinter, attemptNumber: 1, ct).ConfigureAwait(false);
     }
 
     /// <summary>Reprocessa um job cujo <c>nextAttemptAt</c> já chegou (plano §6.5, loop de retry local).</summary>
-    public async Task<PrintOutcome> RetryAsync(
-        PendingJobRecord queued, PrinterProfile profile, IPrinterTransport transport, CancellationToken ct)
+    public async Task<PrintOutcome> RetryAsync(PendingJobRecord queued, ResolvePrinter resolvePrinter, CancellationToken ct)
     {
         if (_jobStore.IsAlreadyHandled(queued.JobId))
         {
@@ -69,22 +75,28 @@ public sealed class PrintOrchestrator
             return PrintOutcome.Failed;
         }
 
-        return await AttemptAsync(job, profile, transport, attemptNumber: queued.Attempts + 1, ct).ConfigureAwait(false);
+        return await AttemptAsync(job, resolvePrinter, attemptNumber: queued.Attempts + 1, ct).ConfigureAwait(false);
     }
 
     private async Task<PrintOutcome> AttemptAsync(
-        PrintJob job, PrinterProfile profile, IPrinterTransport transport, int attemptNumber, CancellationToken ct)
+        PrintJob job, ResolvePrinter resolvePrinter, int attemptNumber, CancellationToken ct)
     {
         PrinterSendResult result;
         try
         {
+            // Resolução de impressora por estação (plano §10) entra no mesmo
+            // try da formatação/envio: um target sem impressora configurada
+            // vira retry local (Not_configured), nunca uma exceção que perde
+            // o job ou derruba o Worker inteiro.
+            var (profile, transport) = resolvePrinter(job.Target);
             var bytes = _formatter.Format(job, profile);
             result = await transport.SendAsync(bytes, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Erro de formatacao (dado do pedido inesperado, bug pontual):
-            // nao adianta re-tentar do mesmo jeito, mas ainda conta como
+            // Erro de formatacao (dado do pedido inesperado, bug pontual) ou
+            // de resolucao/criacao do transporte (config incompleta): nao
+            // adianta re-tentar do mesmo jeito, mas ainda conta como
             // tentativa igual a uma falha normal do transporte.
             result = PrinterSendResult.Fail(PrinterErrorCode.Format_error, isRetryable: false, ex.Message);
         }

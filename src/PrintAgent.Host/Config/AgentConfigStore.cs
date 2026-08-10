@@ -38,7 +38,24 @@ public sealed class AgentConfigStore
         }
 
         var json = File.ReadAllText(_path);
-        return JsonSerializer.Deserialize<AgentConfig>(json, JsonOptions) ?? new AgentConfig();
+        var config = JsonSerializer.Deserialize<AgentConfig>(json, JsonOptions) ?? new AgentConfig();
+
+        // Migração automática e silenciosa do formato pre-1.1 (plano §10): um
+        // agent.json com o campo singular antigo "printer" e sem o "printers"
+        // novo vira uma lista de um elemento, Station=null ("estação padrão,
+        // recebe tudo") — nenhuma instalação existente perde configuração nem
+        // precisa reconfigurar nada ao atualizar o agente.
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("printers", out _)
+            && document.RootElement.TryGetProperty("printer", out var legacyPrinterElement))
+        {
+            var legacyPrinter = legacyPrinterElement.Deserialize<PrinterConfig>(JsonOptions) ?? new PrinterConfig();
+            legacyPrinter.Station = null;
+            config.Printers = [legacyPrinter];
+            Save(config);
+        }
+
+        return config;
     }
 
     public void Save(AgentConfig config)

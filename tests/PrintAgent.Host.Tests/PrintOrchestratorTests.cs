@@ -63,7 +63,7 @@ public class PrintOrchestratorTests : IDisposable
     {
         var transport = new FakeTransport(PrinterSendResult.Ok);
 
-        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), PrinterProfile.Default, transport, CancellationToken.None);
+        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), _ => (PrinterProfile.Default, transport), CancellationToken.None);
 
         Assert.Equal(PrintOutcome.Printed, outcome);
         Assert.True(_store.IsAlreadyHandled("job1"));
@@ -76,9 +76,9 @@ public class PrintOrchestratorTests : IDisposable
     public async Task HandleNewJobAsync_already_printed_does_not_call_transport_again()
     {
         var transport = new FakeTransport(PrinterSendResult.Ok);
-        await _orchestrator.HandleNewJobAsync(BuildJob(), PrinterProfile.Default, transport, CancellationToken.None);
+        await _orchestrator.HandleNewJobAsync(BuildJob(), _ => (PrinterProfile.Default, transport), CancellationToken.None);
 
-        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), PrinterProfile.Default, transport, CancellationToken.None);
+        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), _ => (PrinterProfile.Default, transport), CancellationToken.None);
 
         Assert.Equal(PrintOutcome.AlreadyHandled, outcome);
         Assert.Equal(1, transport.CallCount);
@@ -89,7 +89,7 @@ public class PrintOrchestratorTests : IDisposable
     {
         var transport = new FakeTransport(() => PrinterSendResult.Fail(PrinterErrorCode.Printer_busy, isRetryable: true));
 
-        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), PrinterProfile.Default, transport, CancellationToken.None);
+        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), _ => (PrinterProfile.Default, transport), CancellationToken.None);
 
         Assert.Equal(PrintOutcome.Queued, outcome);
         Assert.False(_store.IsAlreadyHandled("job1"));
@@ -102,13 +102,13 @@ public class PrintOrchestratorTests : IDisposable
     {
         var transport = new FakeTransport(() => PrinterSendResult.Fail(PrinterErrorCode.Out_of_paper, isRetryable: false));
 
-        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), PrinterProfile.Default, transport, CancellationToken.None);
+        var outcome = await _orchestrator.HandleNewJobAsync(BuildJob(), _ => (PrinterProfile.Default, transport), CancellationToken.None);
         Assert.Equal(PrintOutcome.Queued, outcome);
 
         for (var attempt = 2; attempt <= LocalPrintRetryPolicy.MaxAttempts; attempt++)
         {
             var due = Assert.Single(_store.GetDueJobs(DateTimeOffset.UtcNow.AddDays(1)));
-            outcome = await _orchestrator.RetryAsync(due, PrinterProfile.Default, transport, CancellationToken.None);
+            outcome = await _orchestrator.RetryAsync(due, _ => (PrinterProfile.Default, transport), CancellationToken.None);
         }
 
         Assert.Equal(PrintOutcome.Failed, outcome);

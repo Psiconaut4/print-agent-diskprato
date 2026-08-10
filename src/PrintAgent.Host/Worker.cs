@@ -1,4 +1,7 @@
+using PrintAgent.Contracts;
+using PrintAgent.Core;
 using PrintAgent.Host.Storage;
+using PrintAgent.Printing;
 using PrintAgent.Transport;
 using PrintAgent.Transport.Sse;
 
@@ -126,12 +129,21 @@ public sealed class Worker(
         }
     }
 
+    /// <summary>
+    /// Adapta <c>AgentController.ResolvePrinter</c> (devolve <see cref="Config.PrinterConfig"/>)
+    /// para o delegate que <see cref="PrintOrchestrator"/> espera — a criação
+    /// do <see cref="IPrinterTransport"/> concreto (plano §4) é responsabilidade
+    /// do <c>Worker</c>, não do orchestrator, que só formata/envia.
+    /// </summary>
+    private (PrinterProfile Profile, IPrinterTransport Transport) ResolvePrinter(PrintJobTarget target)
+    {
+        var printer = controller.ResolvePrinter(target);
+        return (printer.ToProfile(), PrinterTransportFactory.Create(printer));
+    }
+
     private async Task HandleSseJobAsync(SseStreamClient sse, SseJobEvent e, CancellationToken ct)
     {
-        var profile = controller.Config.Printer.ToProfile();
-        var transport = PrinterTransportFactory.Create(controller.Config.Printer);
-
-        await orchestrator.HandleNewJobAsync(e.Job, profile, transport, ct).ConfigureAwait(false);
+        await orchestrator.HandleNewJobAsync(e.Job, ResolvePrinter, ct).ConfigureAwait(false);
 
         // Só avança depois que HandleNewJobAsync retornou sem lançar: a essa
         // altura o job já está persistido em `jobs` (plano §7.1), então não
@@ -146,13 +158,11 @@ public sealed class Worker(
     private async Task HandlePendingJobsAsync(JobsApiClient jobsApi, CancellationToken ct)
     {
         var jobs = await jobsApi.GetPendingJobsAsync(ct: ct).ConfigureAwait(false);
-        var profile = controller.Config.Printer.ToProfile();
 
         foreach (var job in jobs)
         {
             ct.ThrowIfCancellationRequested();
-            var transport = PrinterTransportFactory.Create(controller.Config.Printer);
-            await orchestrator.HandleNewJobAsync(job, profile, transport, ct).ConfigureAwait(false);
+            await orchestrator.HandleNewJobAsync(job, ResolvePrinter, ct).ConfigureAwait(false);
         }
     }
 
@@ -165,12 +175,10 @@ public sealed class Worker(
             {
                 await Task.Delay(LocalRetryInterval, ct).ConfigureAwait(false);
 
-                var profile = controller.Config.Printer.ToProfile();
                 foreach (var due in jobStore.GetDueJobs(DateTimeOffset.UtcNow))
                 {
                     ct.ThrowIfCancellationRequested();
-                    var transport = PrinterTransportFactory.Create(controller.Config.Printer);
-                    await orchestrator.RetryAsync(due, profile, transport, ct).ConfigureAwait(false);
+                    await orchestrator.RetryAsync(due, ResolvePrinter, ct).ConfigureAwait(false);
                 }
 
                 await RunSafelyAsync(() => ackFlusher.FlushAsync(ct), "flush de acks pendentes (retry loop)").ConfigureAwait(false);
@@ -190,7 +198,7 @@ public sealed class Worker(
 
     private Task ReportStatusAsync(JobsApiClient jobsApi, CancellationToken ct)
     {
-        var printer = controller.Config.Printer;
+        var printer = controller.ResolveDefaultPrinter();
         var report = new Contracts.StatusReport
         {
             PrinterState = Contracts.StatusReportPrinterState.Unknown, // TODO(Fase 8): ligar a QueryStatusAsync dos transportes.

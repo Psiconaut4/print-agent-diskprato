@@ -104,7 +104,7 @@ public sealed class NamedPipeIpcServer(
             return request.Command switch
             {
                 "get-status" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false)),
-                "get-config" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false), controller.Config.Printer),
+                "get-config" => IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false), controller.ResolveDefaultPrinter()),
                 "pair" => await HandlePairAsync(request, ct).ConfigureAwait(false),
                 "unpair" => await HandleUnpairAsync(ct).ConfigureAwait(false),
                 "set-printer" => await HandleSetPrinterAsync(request, ct).ConfigureAwait(false),
@@ -156,7 +156,7 @@ public sealed class NamedPipeIpcServer(
 
     private async Task<IpcResponse> HandleTestPrintAsync(CancellationToken ct)
     {
-        var printer = controller.Config.Printer;
+        var printer = controller.ResolveDefaultPrinter();
         var transport = PrinterTransportFactory.Create(printer);
         var bytes = formatter.Format(BuildSyntheticJob(), printer.ToProfile());
 

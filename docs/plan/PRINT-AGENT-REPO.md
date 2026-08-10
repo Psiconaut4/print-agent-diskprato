@@ -334,6 +334,56 @@ impressora por `target` no `Worker`, e o comando de named pipe
 estação" (§10, opção 1) já funciona hoje com só a mudança desta fase —
 zero mudança em `AgentConfig`/`Worker`/Tray.
 
+**Múltiplas impressoras — Fase 2 de §10 feita em 2026-08-10.** Topologia 2
+(um agente, várias impressoras) agora tem o caminho de dados completo:
+- `PrinterConfig` ganhou `Station` (`PrintJobTarget?`, mesmo enum do
+  contrato). `AgentConfig.Printer` (singular) virou `AgentConfig.Printers`
+  (lista).
+- **Migração automática** em `AgentConfigStore.Load()`: um `agent.json`
+  com o campo singular antigo e sem `printers` é envolvido numa lista de
+  um elemento (`Station = null`, "recebe tudo") e **regravado em disco na
+  hora** — a migração acontece uma única vez, não a cada boot. Coberto por
+  `AgentConfigStoreTests` (inclusive o caso de arquivo ausente e o de
+  `printers` já no formato novo, que não deve ser tocado).
+- **Escolha de impressora por job** em `AgentController.ResolvePrinter(target)`:
+  entrada dedicada à estação → entrada padrão (`Station == null`) →
+  primeira da lista → `PrinterConfig` vazia (nunca lança; um target sem
+  impressora configurada vira retry local "não configurado", nunca perde o
+  job). `UpdatePrinterConfig` virou upsert por `Station` em vez de
+  substituir a única impressora. Coberto por `AgentControllerTests`.
+- **`PrintOrchestrator`** trocou os parâmetros `PrinterProfile`/
+  `IPrinterTransport` (escolhidos pelo `Worker` antes de saber o `target`
+  do job) por um delegate `ResolvePrinter(PrintJobTarget) => (Profile,
+  Transport)`, resolvido depois que o job já foi desserializado — a
+  criação do transporte concreto entrou pra dentro do mesmo `try` da
+  formatação/envio, então um `PrinterTransportFactory.Create` que lança
+  (config incompleta) também vira retry em vez de exceção não tratada
+  (ganho colateral: antes esse `Create` acontecia fora de qualquer
+  `try` no `Worker`, então uma estação mal configurada podia derrubar a
+  sessão pareada inteira — não tinha teste cobrindo esse caminho
+  especificamente, então não dá pra confirmar que era exercitado em
+  produção, mas o código permitia).
+- **Named pipe não mudou de formato**, desvio deliberado do texto original
+  desta seção (que previa `get-config`/`get-status` devolvendo a lista
+  inteira já nesta fase): `set-printer`/`get-config`/`get-status`
+  continuam falando de uma `PrinterConfig` só, resolvida por
+  `AgentController.ResolveDefaultPrinter()` (entrada `Station == null`, ou
+  a primeira, ou uma vazia). Como o Tray de hoje (Fase 6) nunca preenche
+  `Station`, `set-printer` vindo da tela sempre faz upsert da entrada
+  padrão — o Tray continua funcionando sem nenhuma mudança de código, e o
+  checklist manual validado em 2026-08-09 não precisa ser reaberto por
+  causa desta fase. Trocar o formato do pipe agora forçaria mudar o Tray
+  sem nenhum ganho de UI ainda (isso só vem na Fase 3, que é quando a tela
+  aprende a editar mais de uma estação) — melhor adiar a mudança de
+  contrato do pipe pra quando ela vier empacotada com a UI que a
+  justifica.
+`dotnet build`/`dotnet test` (72 testes) verdes na solution inteira.
+
+**Fases 1 e 2 de §10 completas; falta só a Fase 3** (UI do Tray por
+estação) — e essa, como já estava no plano original, só faz sentido depois
+que o dashboard (outro repo) validar que lojistas de verdade configuram
+roteamento.
+
 ---
 
 ## 1. O que o agente é
@@ -1094,10 +1144,11 @@ sem saber nada sobre categorias, produtos ou regras de roteamento.
    `EscPosFormatter` — funciona pra topologia 1 sem tocar em
    `AgentConfig`/Tray. Cabe inteiro em `PrintAgent.Core`, com golden-bytes
    test cobrindo os dois modos (ver §0).
-2. ⏳ Próximo passo. `AgentConfig.Printers` (lista) + migração automática
-   do formato antigo + escolha de impressora por `target` no `Worker`.
-   Ainda sem UI nova no Tray — configurável só via named pipe/suporte,
-   valida o caminho de dados antes de desenhar a tela.
+2. ✅ **Feito em 2026-08-10.** `AgentConfig.Printers` (lista) + migração
+   automática do formato antigo + escolha de impressora por `target` no
+   `Worker`. Sem UI nova no Tray, como planejado — configurável só via
+   named pipe/suporte por enquanto (protocolo do pipe ficou
+   deliberadamente igual ao de antes; ver §0).
 3. `SetupForm` com seção por estação. Só vale a pena depois que a Fase 2
    do outro repo (UI de roteamento no dashboard) já validou que lojistas
    reais usam a feature — não faz sentido redesenhar o Tray pra um cenário
