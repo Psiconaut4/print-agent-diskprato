@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "DiskPrato Print Agent API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Contrato entre o backend DiskPrato e o Print Agent (.NET) instalado na loja.\n\nEste arquivo e a fonte da verdade compartilhada entre os dois repositorios.\nO repositorio do agente gera seus DTOs C# a partir daqui (NSwag/openapi-generator).\nO backend valida os payloads emitidos contra os schemas de `components.schemas`\nem teste de contrato.\n\nRegras de compatibilidade:\n- O caminho carrega a versao major (`/api/print-agents/v1/...`). Quebra de\n  contrato = nova major, e o backend serve N e N-1 simultaneamente por pelo\n  menos um ciclo de release do agente.\n- Dentro de uma major, o backend so ADICIONA campos. O agente deve ignorar\n  campos desconhecidos e nunca falhar por causa deles.\n- Campos marcados `x-since` foram adicionados depois do 1.0.0: o agente deve\n  trata-los como opcionais.",
     "contact": { "name": "DiskPrato" }
   },
@@ -480,8 +480,20 @@
           },
           "target": {
             "type": "string",
-            "enum": ["kitchen", "counter", "customer"],
-            "description": "Reservado para multiplas impressoras por loja (fora de escopo na v1). Na v1 e sempre `kitchen`; o agente pode ignorar, mas nao deve falhar com valores novos."
+            "enum": ["kitchen", "bar", "counter", "customer"],
+            "description": "Estacao de destino do job, usada para roteamento de comandas entre multiplas impressoras (ver `stationLabel`/`printMode`). Restaurantes sem roteamento configurado mandam sempre o dispositivo padrao, tipicamente `kitchen`. O agente deve tratar valores de enum desconhecidos como estacao generica e nunca falhar por causa deles: uma estacao nova pode ser adicionada pelo backend a qualquer momento."
+          },
+          "stationLabel": {
+            "type": "string",
+            "x-since": "1.1.0",
+            "description": "Nome amigavel pt-BR de `target`, pronto para o cabecalho do cupom (ex. \"Cozinha\", \"Bar\"). Evita o agente manter uma tabela de traducao enum->texto que fica desatualizada sem reinstalar quando uma estacao nova e adicionada. Ausente em agentes/pedidos que nao passaram por roteamento; nesse caso o agente usa um cabecalho generico."
+          },
+          "printMode": {
+            "type": "string",
+            "enum": ["production", "receipt"],
+            "default": "receipt",
+            "x-since": "1.1.0",
+            "description": "Como o `EscPosFormatter` deve renderizar o cupom. `receipt` (padrao, comportamento de hoje): recibo completo com precos, forma de pagamento e totais. `production`: comanda de producao (cozinha/bar) — item, quantidade, observacao e modificadores em fonte maior, sem secao de precos/pagamento/totais. Campo opcional para nao quebrar agentes antigos: ausente equivale a `receipt`."
           },
           "copies": { "type": "integer", "minimum": 1, "default": 1 },
           "issuedAt": { "type": "string", "format": "date-time" },
