@@ -194,7 +194,10 @@ public sealed class NamedPipeIpcServer(
             CreatedAt = DateTimeOffset.Now,
             Timezone = null,
             FulfillmentType = PrintOrderFulfillmentType.Pickup,
-            Notes = "Cupom de teste — configuração do PrintAgent",
+            // Hifen comum, nao travessao: "—" (U+2014) nao existe na CP850/CP860
+            // e sai como "?" no cupom impresso — validado numa impressora de
+            // rede falsa em 2026-08-10.
+            Notes = "Cupom de teste - configuração do PrintAgent",
             Customer = new Customer { Name = "Teste", Phone = "" },
             Delivery = null,
             Payment = new PrintPayment
