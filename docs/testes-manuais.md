@@ -7,9 +7,15 @@ coberto por `dotnet test` já está nos projetos `tests/*` — este arquivo é
 só para o que sobra.
 
 Fonte da lista: seção "Pendências manuais" e critérios de aceite de cada
-fase em `docs/plan/PRINT-AGENT-REPO.md §8`. Atualize os dois documentos
-juntos quando um teste passar a ser automatizável ou quando uma fase nova
-adicionar pendência própria.
+fase em `docs/plan/PRINT-AGENT-REPO.md §8`/`§10`. Atualize os dois
+documentos juntos quando um teste passar a ser automatizável ou quando uma
+fase nova adicionar pendência própria.
+
+Itens já validados e fechados (convivência do spooler com outro PDV, fase
+2; SSE contra backend real — reconexão e revogação, fase 3) saíram deste
+arquivo. O histórico completo desses dois — bugs encontrados, causa raiz,
+correção — continua em `docs/plan/PRINT-AGENT-REPO.md §0`, não precisa
+duplicar aqui.
 
 ---
 
@@ -31,81 +37,16 @@ Pré-requisitos comuns a quase todos os testes abaixo:
    - Porta: `FILE:` (já existe por padrão)
    - Fabricante `Generic` → driver `Generic / Text Only`
    - Nomeie como quiser (os exemplos abaixo usam `Generic / Text Only`)
+   - Para os testes de múltiplas estações (§3), é útil ter uma **segunda**
+     fila `FILE:` com outro nome (ex. `Generic / Text Only (Cozinha)`), pra
+     confirmar que cada seção do Tray de fato manda pra uma fila diferente.
 3. **Para os testes que envolvem pedido de verdade (fila local, Tray):**
    um código de pareamento válido gerado no dashboard de dev do DiskPrato,
    e o backend de dev acessível pela máquina de teste.
 
 ---
 
-## 1. Convivência do spooler com outro PDV (Fase 2)
-
-### O que está sendo testado
-
-`SpoolerPrinterTransport` manda ESC/POS cru (`pDatatype = "RAW"`) direto
-pela fila de impressão do Windows, sem tomar posse do dispositivo — o
-requisito que define todo o desenho do agente (plano §4): o restaurante já
-tem um PDV usando aquela mesma impressora, e o agente não pode atrapalhar.
-O spooler do Windows é quem serializa os jobs entre os dois programas; este
-teste prova que essa serialização realmente acontece e que nenhum job sai
-com bytes de dois pedidos misturados.
-
-### Passos
-
-1. Rode o Host (ou dispare via Tray → "Imprimir teste") apontado para a
-   fila `Generic / Text Only`.
-2. Simule um "PDV fake" concorrente escrevendo RAW na mesma fila, em loop,
-   ao mesmo tempo. Um jeito rápido em PowerShell (mesmo padrão de
-   `OpenPrinter`/`WritePrinter` que o `SpoolerPrinterTransport` usa):
-
-   ```powershell
-   Add-Type -Namespace Raw -Name Spool -MemberDefinition @'
-   [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
-   public static extern bool OpenPrinter(string name, out IntPtr h, IntPtr d);
-   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-   public struct DOCINFO { public string pDocName, pOutputFile, pDatatype; }
-   [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint="StartDocPrinterW")]
-   public static extern int StartDocPrinter(IntPtr h, int level, ref DOCINFO di);
-   [DllImport("winspool.drv")] public static extern bool StartPagePrinter(IntPtr h);
-   [DllImport("winspool.drv")] public static extern bool WritePrinter(IntPtr h, byte[] buf, int count, out int written);
-   [DllImport("winspool.drv")] public static extern bool EndPagePrinter(IntPtr h);
-   [DllImport("winspool.drv")] public static extern bool EndDocPrinter(IntPtr h);
-   [DllImport("winspool.drv")] public static extern bool ClosePrinter(IntPtr h);
-   '@
-
-   for ($i = 0; $i -lt 200; $i++) {
-     [IntPtr]$h = [IntPtr]::Zero
-     [Raw.Spool]::OpenPrinter("Generic / Text Only", [ref]$h, [IntPtr]::Zero) | Out-Null
-     $di = New-Object Raw.Spool+DOCINFO
-     $di.pDocName = "PDV-FAKE"; $di.pDatatype = "RAW"
-     [Raw.Spool]::StartDocPrinter($h, 1, [ref]$di) | Out-Null
-     [Raw.Spool]::StartPagePrinter($h) | Out-Null
-     $bytes = [System.Text.Encoding]::ASCII.GetBytes("PDV-FAKE-JOB-$i`n")
-     [Raw.Spool]::WritePrinter($h, $bytes, $bytes.Length, [ref]0) | Out-Null
-     [Raw.Spool]::EndPagePrinter($h) | Out-Null
-     [Raw.Spool]::EndDocPrinter($h) | Out-Null
-     [Raw.Spool]::ClosePrinter($h) | Out-Null
-     Start-Sleep -Milliseconds 50
-   }
-   ```
-3. Enquanto o loop acima roda, dispare vários "Imprimir teste" pelo Tray
-   (ou `test-print` pelo pipe, repetidamente) — ver §5 abaixo para o
-   comando exato.
-
-### Critério de sucesso
-
-- Nenhum "acesso negado" / handle inválido em nenhum dos dois lados.
-- Cada arquivo de saída (a porta `FILE:` pede o caminho na primeira
-  impressão de cada job — ou configure a porta pra sempre escrever no
-  mesmo arquivo e inspecione com `Get-Content -Raw`) contém **um** cupom
-  ESC/POS completo (começa com `1B 40`) ou **um** bloco `PDV-FAKE-JOB-N`
-  inteiro — nunca os dois entrelaçados.
-- (Opcional, recomendado) Renderize os bytes capturados do cupom do
-  DiskPrato com `receiptline` ou `python-escpos` para confirmar que saiu
-  legível, com acentos (`ç ã õ é`) corretos.
-
----
-
-## 2. Fila local em arquivo e recuperação de pedidos (Fase 4 — `JobStore`)
+## 1. Fila local em arquivo e recuperação de pedidos (Fase 4 — `JobStore`)
 
 ### O que está sendo testado
 
@@ -120,10 +61,10 @@ processo rodando de verdade.
 
 ### Passos
 
-1. Suba o Host pareado com o backend de dev (ver §5, comando `pair`, ou
+1. Suba o Host pareado com o backend de dev (ver §3, comando `pair`, ou
    pareie pelo Tray).
-2. Configure a impressora pra fila `Generic / Text Only` (§5, `set-printer`,
-   ou pelo Tray).
+2. Configure a impressora "padrão" pra fila `Generic / Text Only` (§3,
+   `set-printer`, ou pelo Tray).
 3. Faça um pedido de teste no cardápio associado ao restaurante pareado.
 4. Acompanhe a pasta da fila:
    ```powershell
@@ -134,11 +75,10 @@ processo rodando de verdade.
      `printed\<jobId>.json` com `"acked": false`.
    - Em até ~15s (intervalo do `AckFlusher`), `acked` deve virar `true` no
      mesmo arquivo.
-5. **Teste de recuperação (o critério de aceite oficial da Fase 4):** faça
-   outro pedido e mate o processo (`Ctrl+C`) bem no instante em que
-   `pending\<jobId>.json` aparece, antes de virar `printed\`. Suba o Host
-   de novo — o pedido deve sair impresso **uma única vez** (o Host busca
-   `jobs/pending` na reconexão, e `RecordReceived` é idempotente).
+5. **Teste de recuperação:** faça outro pedido e mate o processo
+   (`Ctrl+C`) bem no instante em que `pending\<jobId>.json` aparece, antes
+   de virar `printed\`. Suba o Host de novo — o pedido deve sair impresso
+   **uma única vez**.
 6. **Teste de falha/retry:** aponte a config da impressora para algo
    inválido (ex: fila inexistente) e faça um pedido — confira em
    `pending\<jobId>.json` que `attempts` cresce e `nextAttemptAt` avança a
@@ -153,133 +93,49 @@ processo rodando de verdade.
 - `printed\`/`failed\` acabam com `acked: true` (confirmação chega ao
   backend mesmo que atrasada).
 
-### Resultado (2026-08-09)
+### Status
 
-**Falhou** no critério de ack. Pedido real (`Pedido-0006-HJB5`) chegou via
-SSE e imprimiu localmente sem erro (`printed\<jobId>.json` gravado,
-`attempts: 1`), mas `acked` nunca virou `true` — mesmo esperando vários
-minutos e reiniciando o Host duas vezes. Causa: o backend rejeita todo
-`ack` com `400 Bad Request` porque `printedAt` sai serializado como
-`2026-08-09T19:41:47.2275009+00:00` (offset explícito, formato padrão do
-`DateTimeOffset` do .NET) e `ackJobSchema` (`print-agents.schema.ts`) usa
-`z.iso.datetime()`, que exige sufixo `Z` e rejeita offset — confirmado
-reproduzindo a validação Zod isolada. Falha é determinística, não
-intermitente. Ver `docs/plan/PRINT-AGENT-REPO.md §0` para detalhe
-completo, incluindo um bug secundário (o loop periódico de ack engole essa
-falha sem logar nada). Os testes de recuperação (matar o processo em
-`pending\`) e de retry/falha (fila inválida) não chegaram a ser executados
-por causa deste bloqueio.
+Os três passos (fluxo normal, recuperação, retry/falha) **passaram** contra
+o backend de dev real em 2026-08-09, depois de duas rodadas de bugs
+encontrados e corrigidos no formato/serialização do `ack` (`printedAt` sem
+`Z`, depois campos opcionais nulos explícitos no JSON) — detalhe completo
+em `docs/plan/PRINT-AGENT-REPO.md §0`.
 
-**Corrigido em 2026-08-09** (ver `docs/plan/PRINT-AGENT-REPO.md §0` para o
-detalhe): `printedAt` agora sempre serializa em UTC com sufixo `Z`, e o
-flush de ack no loop de retry local não morre mais em silêncio quando falha.
-`dotnet test` cobre a serialização (`JobsApiClientTests`); **este teste
-manual (§2) precisa ser refeito do zero** — incluindo os passos de
-recuperação e retry/falha que não chegaram a rodar da vez passada — para
-confirmar contra o backend real.
+### O que ainda falta validar
 
-### Resultado (2026-08-09, segunda rodada)
-
-**Falhou de novo, causa raiz diferente.** A correção do `printedAt` não era
-suficiente: o ack de um pedido real continuava voltando `400 Bad Request`.
-Causa raiz: `AckRequest`/`ReportStatusDto` têm campos opcionais
-(`errorCode`, `errorMessage`, ...) e o `JsonSerializerOptions` de
-`JobsApiClient` não tinha `DefaultIgnoreCondition =
-JsonIgnoreCondition.WhenWritingNull` — o `System.Text.Json` escreve
-`"errorCode":null` explícito pra todo campo nulo, mas o schema Zod do
-backend usa `.optional()` (aceita a chave ausente, rejeita `null`
-explícito). Confirmado isolando a validação Zod via `curl` direto no
-endpoint, com e sem os campos nulos no corpo.
-
-**Corrigido em 2026-08-09:** `JobsApiClient.CreateJsonOptions()` agora seta
-`DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull`. `dotnet
-test` (68 testes) segue verde. Confirmado contra o backend real (restaurante
-"Forno di Napoli", backend de dev): pedido novo imprime e é confirmado
-(`acked: true`) em ~15-20s.
-
-Depois da correção, os três passos deste teste passaram:
-- **Fluxo normal** (pending → printed → acked): ok, sem intervenção manual.
-- **Recuperação** (matar o Host com o job em `pending\`, antes de
-  imprimir): ok — apontei a impressora pra uma fila inexistente pra segurar
-  o job em `pending\` com retry agendado, matei o processo, corrigi a
-  impressora e subi o Host de novo; o job saiu de `pending\` e foi impresso
-  **uma única vez**, confirmado em `printed\` com `acked: true`.
-- **Retry/falha** (impressora inválida do início ao fim): ok — `attempts`
-  cresceu a cada tentativa (schedule 60/90/120/150/180s), o job migrou pra
-  `failed\<jobId>.json` com `attempts: 5` e `errorCode: "Not_configured"`
-  preenchidos, dentro da janela de ~10 min esperada.
-
-**Bug secundário encontrado, não corrigido:** `AckFlusher.SendAsync` só
-trata `OperationCanceledException`, `PrintAgentUnauthorizedException` e
-`PrintAgentVersionUnsupportedException` — qualquer outra exceção (ex.: um
-`HttpRequestException` de 400 inesperado, como um job órfão que não existe
-mais no backend) escapa do `foreach` em `AckFlusher.FlushAsync` e aborta a
-rodada inteira, deixando o resto da fila de acks sem tentar. Reproduzido
-com jobs órfãos de uma sessão anterior bloqueando o ack de um job novo e
-válido até serem removidos manualmente. Candidato a fix futuro.
+- **`AckFlusher.SendAsync` com job órfão na fila.** Um bug secundário foi
+  encontrado na rodada 2 (uma exceção inesperada de ack — ex. `400` de um
+  job que não existe mais no backend — abortava a rodada de flush inteira,
+  deixando jobs válidos sem tentar) e corrigido em 2026-08-09 (catch
+  genérico que loga e segue pro próximo). **Nunca foi revalidado contra o
+  backend real** depois da correção. Passos: deixe um job órfão em
+  `printed\<jobId>.json` com `acked: false` de uma sessão anterior (ou crie
+  um manualmente com um `jobId` que o backend não reconhece), faça um
+  pedido novo válido, e confirme que o pedido novo é confirmado (`acked:
+  true`) mesmo com o órfão continuando a falhar a cada rodada — sem travar
+  o restante da fila.
+- **Fluxo ponta a ponta depois do refactor de roteamento por estação**
+  (Fase 2 do plano §10, 2026-08-10). `PrintOrchestrator` trocou os
+  parâmetros `PrinterProfile`/`IPrinterTransport` pré-calculados por um
+  delegate resolvido só depois de desserializar o job, e a criação do
+  transporte concreto (`PrinterTransportFactory.Create`) entrou pro mesmo
+  `try` da formatação/envio. É uma mudança de implementação sem mudança de
+  contrato externo, coberta por unit test (`PrintOrchestratorTests`,
+  `AgentControllerTests`) — mas nunca foi exercitada com um pedido real de
+  ponta a ponta desde o refactor. Repita os passos 1–4 acima (fluxo normal)
+  numa instalação de estação única (topologia 1 do §10, sem nenhuma
+  impressora dedicada configurada) só para confirmar que o caminho mais
+  comum continua idêntico ao de antes do refactor.
 
 ---
 
-## 3. Cliente HTTP/SSE contra o backend real (Fase 3) — smoke opcional
-
-Já coberto por teste automatizado contra um servidor SSE fake
-(`PrintAgent.Transport.Tests`: reconexão, `Last-Event-ID`, watchdog, `401`,
-`device:revoked`). Este item é só um smoke test opcional contra o backend
-de verdade, útil se algo parecer errado em produção e os testes automáticos
-não reproduzirem:
-
-- Derrube a rede da máquina de teste por alguns segundos com o Host
-  pareado e rodando — confira no log que ele detecta a queda (watchdog de
-  90s ou erro de socket) e reconecta sozinho com backoff.
-- Revogue o dispositivo pelo dashboard — confira que o Host apaga o token
-  e **para** de tentar reconectar (não deve entrar em loop de erro 401).
-
-### Resultado (2026-08-09)
-
-**Falhou** — não intencional, reproduzido organicamente (o backend de dev
-resetou a conexão durante a sessão). Um `IOException`/`SocketException`
-(reset de conexão, 10054) dentro de `SseStreamClient.ConnectAndPumpAsync`
-só é capturado se for `OperationCanceledException` — qualquer outra
-exceção de rede sobe até `Worker.ExecuteAsync` e derruba o **processo
-inteiro** do `PrintAgent.Host` (`BackgroundServiceExceptionBehavior =
-StopHost`), em vez de acionar o reconnect-com-backoff que este teste
-deveria confirmar. Reproduzido 2x seguidas na mesma sessão (mesmo
-stacktrace as duas vezes). Ver `docs/plan/PRINT-AGENT-REPO.md §0` para o
-detalhe completo.
-
-**Corrigido em 2026-08-09**: `IOException`/`HttpRequestException` durante a
-leitura do stream agora acionam reconexão com backoff normal, e
-`Worker.ExecuteAsync` ganhou uma segunda camada de proteção (qualquer
-exceção inesperada na sessão pareada loga e reabre em vez de derrubar o
-host). `dotnet test` cobre o caso de reset de conexão
-(`SseStreamClientTests.ConnectionReset_DuringRead_ReconnectsInsteadOfThrowing`).
-**Este teste manual (§3) precisa ser refeito** — derrubar a rede com o Host
-pareado e rodando — para confirmar contra condições de rede reais.
-
-### Resultado (2026-08-09, segunda rodada)
-
-**Passou nos dois cenários**, reaberto de propósito desta vez (a rodada
-anterior foi reprodução orgânica):
-
-- Reiniciei o processo do backend de dev com o Host pareado e rodando: o
-  Host detectou a queda e reconectou sozinho (novo log "Stream conectado"),
-  sem erro nem derrubar o processo — confirma a correção.
-- Revoguei o dispositivo pelo endpoint admin
-  (`DELETE /api/print-agents/:deviceId`): o Host apagou o token
-  (`Token invalidado (DeviceRevoked) — apagando e parando de reconectar.`)
-  e voltou pro estado "Sem token de dispositivo — aguardando pareamento.",
-  sem loop de erro 401.
-
-Nenhum bug novo encontrado neste teste — sem alterações de código.
-
----
-
-## 4. Impressora de rede real (Fase 5) — opcional, precisa de hardware
+## 2. Impressora de rede real (Fase 5) — opcional, precisa de hardware
 
 `NetworkPrinterTransport` (IP:9100) já tem teste automatizado contra uma
 impressora de rede falsa que recusa a segunda conexão simultânea
 (`PrintAgent.Printing.Tests`). Com uma impressora térmica de rede de
-verdade na mesma LAN, dá pra confirmar comportamento que o fake não cobre:
+verdade na mesma LAN, dá pra confirmar comportamento que o fake não cobre.
+**Nunca executado** — depende de hardware que ainda não foi providenciado.
 
 - Configure `transport: network` apontando pro IP:porta real e faça um
   pedido — deve imprimir normalmente.
@@ -291,7 +147,7 @@ verdade na mesma LAN, dá pra confirmar comportamento que o fake não cobre:
 
 ---
 
-## 5. Tray — ícone da bandeja e tela de configuração (Fase 6)
+## 3. Tray — ícone da bandeja e tela de configuração, com múltiplas estações (Fase 6 + Fase 3 do §10)
 
 ### O que é o Tray
 
@@ -305,12 +161,16 @@ Por isso existe este segundo programa, que:
   iniciar sozinho com o Windows, na pasta de startup do usuário);
 - mostra um **ícone na bandeja** cuja cor reflete o estado do agente —
   cinza (sem pareamento), vermelho (pareado mas sem conexão com o
-  DiskPrato), laranja (conectado, mas a impressora sinalizou problema:
-  offline / sem papel / tampa aberta) ou verde (tudo certo);
-- abre uma **tela de configuração** (pareamento, escolha de fila do
-  Windows ou IP:porta da impressora, largura do papel, code page, opção de
-  remover acentos, número de cópias, botão de impressão de teste, e um log
-  das últimas ações);
+  DiskPrato), laranja (conectado, mas a impressora "padrão" sinalizou
+  problema: offline / sem papel / tampa aberta / estado desconhecido) ou
+  verde (tudo certo);
+- abre uma **tela de configuração** com pareamento e uma **seção de
+  impressora por estação** (Fase 3 do §10): cada seção tem seu combo de
+  Estação (Padrão/Cozinha/Bar/Balcão/Cliente), fila do Windows ou
+  IP:porta, papel, code page, remover acentos, cópias, e botões
+  Salvar/Imprimir teste/Remover independentes; um botão "+ Adicionar
+  impressora" no rodapé cria uma seção em branco. A tela também tem um log
+  das últimas ações;
 - **nunca lê o `device.dat` (token) nem o `agent.json` diretamente** — tudo
   passa pelo named pipe `\\.\pipe\diskprato-printagent`, conversando em
   JSON com o serviço, que é quem de fato guarda e protege essas
@@ -337,7 +197,7 @@ dotnet run
 Um ícone cinza deve aparecer na bandeja do sistema (pode estar escondido
 no "^" de ícones ocultos do Windows).
 
-Roteiro, na ordem:
+### Roteiro base (já validado uma vez, revalidar se algo aqui quebrar)
 
 - [ ] **Sem pareamento:** o tooltip do ícone mostra algo como "Aguardando
   pareamento". Clique duplo (ou botão direito → "Configurar...") abre a
@@ -346,28 +206,79 @@ Roteiro, na ordem:
   nome de dispositivo, clique "Parear". O log de atividade deve mostrar
   "Pareado com sucesso" e o resumo atualizar. Em até 5s (intervalo de
   polling do Tray) o ícone deve refletir se o `Worker` já conectou o SSE.
-- [ ] **Configurar impressora:** escolha "Fila do Windows (spooler)",
-  selecione (ou digite) `Generic / Text Only`, clique "Salvar" — deve
-  logar "Configuração da impressora salva".
-- [ ] **Teste de impressão:** clique "Imprimir teste" (no menu de contexto
-  do ícone e também dentro da tela de setup) — deve sair um cupom
-  sintético com acentos (`ç ã õ é`) e logar sucesso/falha.
-- [ ] **Persistência da tela:** feche e reabra a tela de setup — os campos
-  devem vir pré-preenchidos com o que foi salvo (valida o comando
-  `get-config`).
-- [ ] **Estado real da impressora:** desligue/desconecte a impressora (ou
-  aponte pra um host de rede inválido) — o resumo deve mostrar
-  "offline"/"estado desconhecido" em vez de fingir que está pronta, e o
-  ícone deve virar laranja quando pareado + conectado mas com a impressora
-  com problema.
+- [ ] **Persistência da tela:** feche e reabra a tela de setup — as seções
+  de impressora devem vir reconstruídas a partir do que foi salvo (valida
+  `get-config` devolvendo a lista).
 - [ ] **Despareamento:** clique "Desparear", confirme o diálogo — o
   resumo volta a "Não pareado".
 - [ ] **Encerramento:** botão direito no ícone → "Sair" — o ícone some da
   bandeja e o processo do Tray termina; o `Host` continua rodando à parte
   (são processos independentes).
 
-Se preferir testar o protocolo do pipe sem abrir o Tray (útil para
-depurar), dá pra falar com o serviço direto por PowerShell:
+### Roteiro novo — múltiplas estações (Fase 3 do §10, **nunca validado numa sessão desktop real**)
+
+- [ ] **Impressora padrão:** com a tela recém-aberta (uma seção em
+  branco, Estação = "Padrão"), configure a fila `Generic / Text Only`,
+  clique "Salvar" — log deve mostrar `Configuração da impressora "Padrão"
+  salva.`. "Imprimir teste" nessa seção deve sair um cupom sintético com
+  acentos (`ç ã õ é`).
+- [ ] **Adicionar uma segunda estação:** clique "+ Adicionar impressora",
+  na seção nova selecione Estação = "Cozinha", configure a segunda fila
+  `FILE:` (ou a mesma, se só tiver uma disponível), "Salvar" — log deve
+  mostrar `Configuração da impressora "Cozinha" salva.`, e a seção
+  "Padrão" configurada antes deve continuar intacta (não foi
+  sobrescrita).
+- [ ] **Duplicar estação (validação client-side):** adicione uma terceira
+  seção, selecione Estação = "Cozinha" de novo (mesma da seção anterior) e
+  clique "Salvar" — deve **bloquear no cliente**, sem chamar o pipe:
+  log mostra algo como `Já existe outra impressora configurada para
+  "Cozinha"...`, e a config da seção "Cozinha" original não muda.
+- [ ] **Imprimir teste por estação:** com "Padrão" e "Cozinha" salvas,
+  clique "Imprimir teste" em cada seção separadamente — cada uma deve
+  imprimir na fila daquela seção especificamente (confirme comparando os
+  arquivos de saída das duas filas `FILE:`, se configuradas com nomes
+  diferentes).
+- [ ] **Persistência com múltiplas seções:** feche e reabra a tela — devem
+  aparecer duas seções (Padrão + Cozinha), cada uma com os campos certos
+  pré-preenchidos, na mesma ordem/config salva.
+- [ ] **Remover uma estação:** na seção "Cozinha", clique "Remover",
+  confirme o diálogo — a seção desaparece da tela e o log confirma
+  `Impressora "Cozinha" removida.`. Reabra a tela: só "Padrão" deve
+  restar.
+- [ ] **Remover a última seção:** com só "Padrão" configurada, remova-a
+  também — a tela nunca deve ficar sem nenhuma seção editável (uma seção
+  em branco, Estação = "Padrão", deve aparecer no lugar automaticamente).
+- [ ] **Limitação conhecida a confirmar (não é bug):** configure só uma
+  impressora "Cozinha" (sem nenhuma "Padrão"). O resumo "Estado" no topo
+  da tela deve mostrar a impressora como "não configurada" mesmo com a
+  seção "Cozinha" funcionando normalmente — o resumo hoje só lê o status
+  da impressora "padrão" (`Station == null`), não uma agregação de todas
+  as estações (`get-status` não ganhou granularidade por estação nesta
+  fase, só `get-config`). Confirme que é exatamente esse o comportamento
+  (visualmente confuso, mas esperado) e não algo pior (crash, texto
+  incoerente).
+
+### Roteiro — bugs corrigidos em 2026-08-09 que nunca foram revalidados
+
+Estes dois foram corrigidos em código (`dotnet test` cobre a unidade
+correspondente) mas **nunca confirmados de novo numa sessão desktop
+real**:
+
+- [ ] **Ícone laranja em estado "Unknown".** Aponte a impressora "padrão"
+  pra um nome de fila inexistente (erro de digitação proposital) — o
+  resumo deve mostrar "estado desconhecido" e o **ícone deve ficar
+  laranja**, não verde. (`TrayIcons.StateFor()` mapeando `"Unknown"` pra
+  `PrinterProblem`.)
+- [ ] **Reparear sem restart.** Com o Host pareado e a sessão SSE já
+  conectada (ícone verde/vermelho), desparear e parear de novo **pela
+  própria tela** (não pelo endpoint admin) — o resumo deve voltar a
+  "conectado ao DiskPrato" sozinho, sem precisar reiniciar o processo do
+  `PrintAgent.Host`. (`Worker.RunPairedAsync` reagindo a
+  `AgentController.TokenChanged`.)
+
+### Testando o protocolo do pipe sem abrir o Tray
+
+Útil para depurar sem esperar a UI:
 
 ```powershell
 function Send-Ipc($json) {
@@ -382,136 +293,40 @@ function Send-Ipc($json) {
 
 Send-Ipc '{"Command":"get-status"}'
 Send-Ipc '{"Command":"get-config"}'
-Send-Ipc '{"Command":"set-printer","Printer":{"Transport":0,"SpoolerName":"Generic / Text Only","PaperWidthMm":80,"CodePage":850,"EscTIndex":2}}'
+Send-Ipc '{"Command":"set-printer","Printer":{"Station":null,"Transport":0,"SpoolerName":"Generic / Text Only","PaperWidthMm":80,"CodePage":850,"EscTIndex":2}}'
+Send-Ipc '{"Command":"set-printer","Printer":{"Station":0,"Transport":0,"SpoolerName":"Generic / Text Only (Cozinha)","PaperWidthMm":80,"CodePage":850,"EscTIndex":2}}'
 Send-Ipc '{"Command":"test-print"}'
+Send-Ipc '{"Command":"test-print","Station":0}'
+Send-Ipc '{"Command":"remove-printer","Station":0}'
 Send-Ipc '{"Command":"pair","Code":"XXXX-XXXX","DeviceName":"balcao-teste"}'
 Send-Ipc '{"Command":"unpair"}'
 ```
 
-(`"Transport":0` = spooler, `"Transport":1` = network — o pipe serializa o
-enum como número, não como texto.)
+`"Transport":0` = spooler, `"Transport":1` = network — o pipe serializa o
+enum como número, não como texto. `"Station"` segue o mesmo esquema:
+`0`=Kitchen, `1`=Bar, `2`=Counter, `3`=Customer; ausente/`null` = "padrão".
+`get-config` agora devolve `"Printers"` (lista), não mais `"Printer"`
+(objeto único).
 
-### Resultado (2026-08-09)
+### Histórico
 
-**Bloqueado** logo no primeiro item visual do roteiro — a tela de setup
-abre completamente ilegível (screenshot arquivado nesta sessão): cada
-`GroupBox` ("Estado", "Pareamento", "Impressora") renderiza como uma
-coluna estreitíssima com o título quebrado uma letra por linha, e nenhum
-controle (textbox/combo/botão) fica visível. Causa raiz em
-`SetupForm.Section()`: `GroupBox` com `AutoSize = true` **e**
-`Width = 440` ao mesmo tempo, combinado com o `FlowLayoutPanel` interno
-também `AutoSize = true` + `Dock = DockStyle.Top` — o layout engine
-colapsa a caixa a uma largura quase zero. Não é problema de DPI. O
-pareamento em si (via pipe, fora da UI) funcionou normalmente — só a tela
-visual do Tray está quebrada. Nenhum item do checklist abaixo foi validado
-por causa deste bloqueio. Pedido de melhoria observado à parte (não é
-bug): trocar o ícone atual da bandeja (cor sólida genérica) por algo mais
-estilizado, como uma cabeça de robô ou motivo de impressão. Ver
-`docs/plan/PRINT-AGENT-REPO.md §0` para o detalhe completo.
-
-**Corrigido em 2026-08-09**: `SetupForm.Section()` não doca mais o
-`FlowLayoutPanel` interno (`Dock = DockStyle.Top` removido) e o `GroupBox`
-usa `MinimumSize = new Size(440, 0)` em vez de `Width = 440` fixo — as duas
-mudanças eliminam o conflito com `AutoSize`. `dotnet build` limpo, mas
-como é UI WinForms sem cobertura de teste automatizado (natureza da Fase
-6), **todo o checklist desta seção §5 precisa ser refeito do zero** numa
-sessão desktop real para confirmar visualmente. Pedido de melhoria do
-ícone não foi endereçado (fora de escopo desta correção).
-
-### Resultado (2026-08-09, segunda rodada)
-
-**Layout confirmado corrigido** — a tela de setup abre totalmente legível
-numa sessão desktop real (screenshot capturado via automação de tela).
-Checklist completo, item a item:
-
-- [x] **Sem pareamento:** "Não pareado — digite o código do lojista
-  abaixo." e ícone cinza na bandeja, ok.
-- [x] **Pareamento:** digitando o código gerado pelo endpoint admin +
-  "Parear" (pela própria tela, não pelo pipe) — ok, log de atividade e
-  ícone corretos depois que o stream conecta.
-- [x] **Configurar impressora:** ok, log de atividade mostra "Configuração
-  da impressora salva."
-- [x] **Teste de impressão:** ok, log mostra "Cupom de teste enviado.", sem
-  erro.
-- [x] **Persistência da tela:** ok, fechar/reabrir traz os campos
-  pré-preenchidos (`get-config`) — inclusive depois de eu ter mudado sem
-  querer o campo "Papel" com o scroll do mouse sobre o combo (revertido
-  antes de seguir; comportamento padrão de `ComboBox` do WinForms, não é
-  bug deste app).
-- [x] **Estado real da impressora:** parcial — ver gaps abaixo.
-- [x] **Despareamento:** ok, diálogo de confirmação ("Desparear este
-  dispositivo? Será preciso um novo código do lojista..."), resumo volta a
-  "Não pareado", ícone volta a cinza.
-- [x] **Encerramento:** ok, "Sair" pelo menu de contexto do ícone remove o
-  ícone e finaliza só o processo do Tray — o Host continua rodando à parte,
-  confirmado checando o processo depois.
-
-**Dois gaps novos encontrados, não corrigidos:**
-
-1. **Ícone não reflete estado "Unknown" da impressora.** Apontar a fila do
-   Windows pra um nome inexistente deixa `PrinterStatus = "Unknown"`. O
-   texto do resumo reflete isso corretamente ("estado desconhecido", não
-   finge "pronta") — mas `TrayIcons.StateFor()`
-   (`src/PrintAgent.Tray/TrayIcons.cs`) só mapeia
-   `"Offline"`/`"PaperOut"`/`"CoverOpen"` pro ícone laranja
-   (`PrinterProblem`); `"Unknown"` cai no `default` e o ícone continua
-   **verde** — falsa confiança visual numa configuração quebrada (cenário
-   realista: erro de digitação no nome da fila no balcão).
-2. **Pareamento local não reconecta sem restart do Host.** Desparear e
-   parear de novo pela tela (ou pelo pipe) **enquanto o Worker já tem uma
-   sessão SSE pareada ativa** não tem efeito imediato: `RunPairedAsync`
-   (`src/PrintAgent.Host/Worker.cs`) só reinicia por exceção ou por
-   `TokenInvalidated` (evento `device:revoked` vindo do próprio SSE) — um
-   `unpair`/`pair` local via named pipe não cancela a sessão em execução.
-   Resultado: depois de reparear pela tela, o resumo fica preso em
-   "Pareado, sem conexão com o DiskPrato." (vermelho) indefinidamente
-   (esperei mais de 1 min) — só um restart do `PrintAgent.Host` reconecta
-   de fato com o novo pareamento (confirmado: reiniciar resolveu na hora).
-   Diferente da revogação remota (§3, que funciona porque o backend manda
-   `device:revoked` pelo próprio SSE).
-
-Pedido de melhoria do ícone (trocar por algo mais estilizado) segue em
-aberto, fora de escopo desta rodada.
-
-### Correções (2026-08-09, terceira rodada)
-
-Os três problemas relatados acima foram corrigidos:
-
-- **`AckFlusher` engolindo a fila inteira num erro inesperado** (§2, bug
-  secundário): `AckFlusher.SendAsync` (`src/PrintAgent.Host/AckFlusher.cs`)
-  agora tem um `catch (Exception ex)` genérico depois dos casos já tratados
-  — loga, registra a falha via `RecordAckAttemptFailure` e retorna `true`
-  para seguir pro próximo job da rodada, em vez de abortar tudo. Cancelamento
-  real de shutdown continua propagando normalmente (checado via
-  `ct.IsCancellationRequested` antes do catch genérico).
-- **Ícone não fica laranja em `PrinterStatus = "Unknown"`** (gap 1):
-  `TrayIcons.StateFor()` agora inclui `"Unknown"` junto de
-  `"Offline"/"PaperOut"/"CoverOpen"` no mapeamento para
-  `AgentVisualState.PrinterProblem`.
-- **Pareamento local não reconecta sem restart** (gap 2): `Worker.RunPairedAsync`
-  (`src/PrintAgent.Host/Worker.cs`) agora assina o evento
-  `AgentController.TokenChanged` (já existia, disparado em
-  `PairAsync`/`Unpair`/`InvalidateToken`, mas nada o escutava) e cancela o
-  `linkedCts` da sessão quando ele dispara — a sessão SSE atual encerra
-  de forma limpa e o loop externo do `Worker` reabre com o token/config
-  novos, sem depender de exceção nem de restart do processo.
-
-`dotnet build` (0 avisos, 0 erros) e `dotnet test` (60 testes) confirmados
-verdes. **Revalidação manual ainda pendente** contra backend/desktop reais
-para os três cenários: job órfão bloqueando ack de jobs válidos, ícone
-laranja com fila apontada pra nome inexistente, e reparear pela tela com
-sessão SSE ativa sem precisar reiniciar o Host.
+Layout quebrado (`GroupBox`/`AutoSize`), ícone não refletindo estado
+"Unknown", e pareamento local não reconectando sem restart — todos
+encontrados e corrigidos entre 2026-08-09 e a introdução das seções por
+estação. Detalhe completo (causa raiz, diffs, datas) em
+`docs/plan/PRINT-AGENT-REPO.md §0`; não duplicado aqui.
 
 ---
 
-## 6. Hardware físico real (antecipável antes da Fase 8)
+## 4. Hardware físico real (antecipável antes da Fase 8)
 
 A Fase 8 formaliza isso ("corte de papel, fim de papel e impressora
 desligada produzem os `errorCode` certos no dashboard"), mas dá pra
 adiantar uma verificação com uma impressora térmica de verdade
 (Elgin i9 ou Epson TM-T20) na rede, já que `PrinterStatus`
 (`Ready`/`Offline`/`PaperOut`/`CoverOpen`) já é lido pelo Tray desde a
-Fase 6:
+Fase 6. **Nunca executado** — depende de hardware que ainda não foi
+providenciado.
 
 - Com a impressora configurada como `network`, tire o papel e confirme que
   o resumo do Tray muda pra "sem papel" em até 5s.
@@ -527,5 +342,5 @@ local via `DLE EOT` que o Tray já expõe.
 ## Depois de validar
 
 Atualize `docs/plan/PRINT-AGENT-REPO.md §0`: mova o item correspondente de
-"Pendências manuais" pra fora da lista (ou anote o resultado), e ajuste o
-"Próximo passo" se a validação destravar a fase seguinte.
+"Pendências manuais"/checklist pra fora da lista (ou anote o resultado), e
+ajuste o "Próximo passo" se a validação destravar a fase seguinte.
