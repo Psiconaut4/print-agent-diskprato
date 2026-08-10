@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PrintAgent.Contracts;
 
 namespace PrintAgent.Transport;
@@ -37,7 +38,17 @@ public sealed class JobsApiClient
 
     private static JsonSerializerOptions CreateJsonOptions()
     {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        // `AckRequest`/`ReportStatusDto` tem varios campos opcionais
+        // (errorCode, errorMessage, transport, ...). O schema Zod do backend
+        // usa `.optional()`, nao `.nullable()` — aceita a chave ausente mas
+        // rejeita `null` explicito. Sem isso, o serializer padrao do
+        // System.Text.Json escreve `"errorCode":null` para toda propriedade
+        // nula do DTO, e o ack de um job impresso com sucesso (sem erro)
+        // sempre falha a validacao com 400.
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
         options.Converters.Add(new UtcZDateTimeOffsetConverter());
         options.Converters.Add(new UtcZNullableDateTimeOffsetConverter());
         return options;
