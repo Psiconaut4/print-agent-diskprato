@@ -39,21 +39,33 @@ public sealed class SetupForm : Form
     }
 
     /// <summary>Estações do contrato (plano §10) mais a entrada "padrão" (<c>null</c>), pt-BR pronto pra combo.</summary>
-    private sealed record StationOption(StationDto? Value, string Label)
+    /// <summary>
+    /// <paramref name="Label"/> é o texto do combo, que pode explicar o que a
+    /// estação significa; <paramref name="ShortName"/> é como ela aparece no
+    /// log de atividade. São separados porque a explicação que ajuda na hora
+    /// de escolher polui a linha do log ("Cupom de teste enviado (\"Padrão —
+    /// impressão padrão, sem roteamento específico\")").
+    /// </summary>
+    private sealed record StationOption(StationDto? Value, string Label, string ShortName)
     {
+        public StationOption(StationDto? value, string label)
+            : this(value, label, label)
+        {
+        }
+
         public override string ToString() => Label;
     }
 
     private static readonly StationOption[] StationOptions =
     [
-        new(null, "Padrão — recebe tudo sem impressora própria"),
+        new(null, "Padrão — impressão padrão, sem roteamento", "Padrão"),
         new(StationDto.Kitchen, "Cozinha"),
         new(StationDto.Bar, "Bar"),
-        new(StationDto.Counter, "Balcão"),
+        new(StationDto.Counter, "Balcão / Caixa"),
         new(StationDto.Customer, "Cliente"),
     ];
 
-    private static string GetStationLabel(StationDto? station) => StationOptions.First(o => o.Value == station).Label;
+    private static string GetStationLabel(StationDto? station) => StationOptions.First(o => o.Value == station).ShortName;
 
     /// <summary>Controles de uma seção "Impressora" (uma por estação configurada, plano §10).</summary>
     private sealed class PrinterSectionView
@@ -74,6 +86,18 @@ public sealed class SetupForm : Form
         public required Button TestPrintButton { get; init; }
         public required Button RemoveButton { get; init; }
 
+        /// <summary>
+        /// Estação sob a qual esta seção está de fato gravada no serviço, ou
+        /// <c>false</c> em <see cref="IsPersisted"/> quando ela nunca foi
+        /// salva (seção recém-criada pelo "+ Adicionar impressora"). Não dá
+        /// para deduzir isso de <see cref="SelectedStation"/>: o combo reflete
+        /// o que está na tela agora, que pode nunca ter sido gravado ou ter
+        /// mudado desde o último "Salvar".
+        /// </summary>
+        public StationDto? PersistedStation { get; set; }
+
+        public bool IsPersisted { get; set; }
+
         public StationDto? SelectedStation => ((StationOption)StationCombo.SelectedItem!).Value;
     }
 
@@ -82,11 +106,20 @@ public sealed class SetupForm : Form
         _ipc = ipc;
 
         Text = "Gerente de Impressão DiskPrato — Configuração";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
+        // Janela redimensionavel e minimizavel: com varias secoes de estacao a
+        // tela passa da altura util do monitor, e com FixedDialog o unico jeito
+        // de alcancar as secoes de baixo era rolar o painel interno.
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = true;
+        MinimizeBox = true;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(480, 860);
+        MinimumSize = new Size(500, 400);
+
+        // Altura desejada e a de conteudo completo, mas nunca maior que a area
+        // util do monitor — senao a barra de titulo/borda inferior ficam fora
+        // da tela e a janela nasce impossivel de redimensionar.
+        var workingHeight = Screen.PrimaryScreen?.WorkingArea.Height ?? 900;
+        ClientSize = new Size(480, Math.Min(860, workingHeight - 80));
         Icon = TrayIcons.Unknown;
         Padding = new Padding(10);
         BackColor = Color.FromArgb(240, 240, 240); // cinza claro por trás dos cards brancos das seções
@@ -328,6 +361,10 @@ public sealed class SetupForm : Form
             SaveButton = saveButton,
             TestPrintButton = testPrintButton,
             RemoveButton = removeButton,
+            // Só uma seção vinda do get-config já existe do lado do serviço;
+            // uma seção em branco ("+ Adicionar impressora") ainda não.
+            IsPersisted = initial is not null,
+            PersistedStation = initial?.Station,
         };
 
         saveButton.Click += async (_, _) => await OnSavePrinterAsync(section);
@@ -422,6 +459,18 @@ public sealed class SetupForm : Form
         try
         {
             var response = await _ipc.SetPrinterAsync(printer);
+            if (response.Ok)
+            {
+                // set-printer faz upsert por estação: se o combo mudou desde o
+                // último save, a entrada antiga continua lá com a estação
+                // anterior. Remover a antiga aqui manteria "uma seção = uma
+                // entrada", mas apagaria em silêncio a config de uma estação
+                // que o lojista talvez ainda queira — melhor deixar as duas e
+                // ele remover a que sobrou, que fica visível ao reabrir.
+                section.IsPersisted = true;
+                section.PersistedStation = station;
+            }
+
             LogActivity(
                 response.Ok ? $"Configuração da impressora \"{GetStationLabel(station)}\" salva." : $"Falha ao salvar: {response.Error}",
                 response.Ok);
@@ -453,6 +502,19 @@ public sealed class SetupForm : Form
 
     private async Task OnRemovePrinterAsync(PrinterSectionView section)
     {
+        if (!section.IsPersisted)
+        {
+            // Seção que nunca foi salva não existe do lado do serviço: aqui
+            // "Remover" é só desfazer o "+ Adicionar impressora". Mandar
+            // remove-printer neste caso apagaria a impressora que já estava
+            // gravada naquela estação (bug real: adicionar uma seção em
+            // branco, cuja estação nasce "Padrão", e desistir dela levava
+            // junto a impressora "Padrão" que estava funcionando).
+            DropSection(section);
+            LogActivity("Seção descartada (não estava salva).");
+            return;
+        }
+
         var confirm = MessageBox.Show(
             this, "Remover esta impressora da configuração?", "Confirmar", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (confirm != DialogResult.Yes)
@@ -460,7 +522,10 @@ public sealed class SetupForm : Form
             return;
         }
 
-        var station = section.SelectedStation;
+        // A estação gravada, não a do combo: se o lojista trocou o combo sem
+        // salvar, remover pela seleção atual apagaria outra estação (ou
+        // nenhuma) e deixaria a gravada órfã na configuração.
+        var station = section.PersistedStation;
         var response = await _ipc.RemovePrinterAsync(station);
         LogActivity(
             response.Ok ? $"Impressora \"{GetStationLabel(station)}\" removida." : $"Falha ao remover: {response.Error}",
@@ -470,16 +535,20 @@ public sealed class SetupForm : Form
             return;
         }
 
+        DropSection(section);
+        ApplyStatus(response.Status, null);
+    }
+
+    /// <summary>Tira a seção da tela mantendo a regra de nunca ficar sem nenhuma seção editável.</summary>
+    private void DropSection(PrinterSectionView section)
+    {
         _printersContainer.Controls.Remove(section.Card);
         _printerSections.Remove(section);
 
         if (_printerSections.Count == 0)
         {
-            // Nunca deixa a tela sem nenhuma seção editável.
             AddPrinterSection(initial: null);
         }
-
-        ApplyStatus(response.Status, null);
     }
 
     private async Task OnPairAsync()
