@@ -22,7 +22,8 @@ src/
   PrintAgent.Host/        Worker Service: fila local em arquivo, PrintOrchestrator, AckFlusher, named pipe IPC
   PrintAgent.Tray/        Tray icon + tela de setup (WinForms) — fala com Host só pelo JSON do named pipe, sem referenciar o projeto Host
 tests/                    um projeto de teste por projeto de src/ acima (PrintAgent.Tray não tem — é UI, validação manual)
-installer/                WiX — vazio, não iniciado
+installer/                WiX v5 -> .msi (Package.wxs). Fora da .slnx: publica ~190 MB self-contained por build
+resources/                ícones; icon-16-256.ico é gerado de icon-256.ico por build-icon.ps1
 ```
 
 Regra de dependência: `Host` → `Transport`/`Printing`/`Core` → `Contracts`.
@@ -32,7 +33,14 @@ Regra de dependência: `Host` → `Transport`/`Printing`/`Core` → `Contracts`.
 ```powershell
 dotnet build      # deve sair com 0 avisos, 0 erros (Directory.Build.props: warnings as errors)
 dotnet test       # todos os projetos de teste, sem mocks de filesystem/HTTP — usam diretório temp real e servidor fake
+
+dotnet build installer/PrintAgent.Installer.wixproj -c Release   # -> installer/bin/Release/DiskPratoPrintAgent.msi
 ```
+
+O `.msi` **não** sai de `dotnet build` na raiz: o `installer/` está fora da
+`PrintAgent.slnx` de propósito, porque cada build dele publica os dois
+executáveis self-contained (~190 MB). Um job separado do `ci.yml` monta o
+pacote para que quebra de `.wxs` apareça mesmo assim.
 
 O que `dotnet test` não cobre (Tray, convivência do spooler com hardware
 real, fila local ponta a ponta contra backend real) está roteirizado em
@@ -40,8 +48,9 @@ real, fila local ponta a ponta contra backend real) está roteirizado em
 
 ## Estado atual (2026-08-10)
 
-Fases 0–6 completas (scaffold, Contracts, EscPosFormatter, os dois
-transportes de impressão, cliente HTTP/SSE, Worker Service, Tray/setup),
+Fases 0–7 completas (scaffold, Contracts, EscPosFormatter, os dois
+transportes de impressão, cliente HTTP/SSE, Worker Service, Tray/setup,
+instalador WiX),
 incluindo a Fase 5 — `NetworkPrinterTransport` está implementado e o
 critério de aceite do plano §8 (impressora de rede falsa que recusa a
 segunda conexão simultânea → retry com backoff, sem falha terminal) é
@@ -54,15 +63,20 @@ Também estão implementadas as três fases de roteamento por estação
 `AgentConfig.Printers` como lista por estação, e o Tray editando N
 impressoras.
 
-**Não iniciadas:** Fase 7 (instalador WiX — `installer/` está vazio) e
-Fase 8 (Serilog com rotação, exportar diagnóstico, auto-teste; os TODOs
-estão marcados em `Worker.cs:28` e `Worker.cs:204` — `agentVersion`
-hardcoded e `StatusReport.PrinterState` sempre `Unknown`).
+**Não iniciada:** Fase 8 (Serilog com rotação, exportar diagnóstico,
+auto-teste; os TODOs estão marcados em `Worker.cs:28` e `Worker.cs:204` —
+`agentVersion` hardcoded e `StatusReport.PrinterState` sempre `Unknown`).
 
 Ver tabela e histórico completo em `docs/plan/PRINT-AGENT-REPO.md §0`. O
 checklist manual do Tray foi inteiro validado em 2026-08-10 (incluindo
-múltiplas estações); a única validação manual que continua pendente é a
-que depende de impressora térmica real — `docs/testes-manuais.md` §2/§4.
+múltiplas estações); continuam pendentes de validação manual só o que
+depende de impressora térmica real (`docs/testes-manuais.md` §2/§4) e o
+`.msi` numa VM Windows limpa (§5).
+
+**Backend em fase de teste:** o default de `AgentConfig.ApiBaseUrl` aponta
+para o túnel Cloudflare (`https://api.psiconaut4.com.br`), não para
+`api.diskprato.com`. O default só vale para `agent.json` recém-criado —
+depois disso o valor no arquivo manda.
 
 **Fila local:** arquivo, não banco. `%ProgramData%\DiskPrato\PrintAgent\queue\`
 com `pending/`, `printed/`, `failed/` — um `.json` por job, escrita atômica

@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão (ex: 1.0.0) — sem a tag, para gerar um .msi de teste'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  msi:
+    runs-on: windows-latest
+
+    # No nível do job porque `if:` de step não enxerga `env:` declarado no
+    # próprio step, e secrets não podem ser lidos direto numa expressão `if`.
+    env:
+      SIGNING_CERT_PFX_BASE64: ${{ secrets.SIGNING_CERT_PFX_BASE64 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Tag v1.2.3 -> 1.2.3. O ProductVersion do MSI só aceita x.y.z numérico,
+      # então tag com sufixo (v1.2.3-rc1) não serve para release.
+      - name: Resolver versão
+        id: version
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ github.event.inputs.version }}'
+          } else {
+            '${{ github.ref_name }}' -replace '^v', ''
+          }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Versão '$v' não é x.y.z — o ProductVersion do MSI não aceita sufixo."
+          }
+          "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        run: dotnet test --configuration Release -p:Version=${{ steps.version.outputs.value }}
+
+      # Publica por fora do wixproj para poder assinar os .exe antes de
+      # empacotar (ver SkipAgentPublish no PrintAgent.Installer.wixproj).
+      - name: Publish
+        shell: pwsh
+        run: |
+          $pub = '--configuration', 'Release', '-r', 'win-x64', '--self-contained', 'true',
+                 '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
+                 '-p:DebugType=none', '-p:Version=${{ steps.version.outputs.value }}'
+          dotnet publish src/PrintAgent.Host/PrintAgent.Host.csproj @pub -o installer/obj/stage/Release/host
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          dotnet publish src/PrintAgent.Tray/PrintAgent.Tray.csproj @pub -o installer/obj/stage/Release/tray
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # Assinatura de código (plano §8, Fase 7). Sem os secrets configurados o
+      # build segue sem assinar, para o workflow continuar utilizável antes de
+      # o certificado EV existir — o .msi só não passa liso no SmartScreen.
+      - name: Importar certificado
+        id: cert
+        if: env.SIGNING_CERT_PFX_BASE64 != ''
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:SIGNING_CERT_PFX_BASE64))
+          "pfx=$path" >> $env:GITHUB_OUTPUT
+
+      - name: Assinar executáveis
+        if: steps.cert.outputs.pfx != ''
+        shell: pwsh
+        env:
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /f '${{ steps.cert.outputs.pfx }}' /p $env:SIGNING_CERT_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+            installer/obj/stage/Release/host/PrintAgent.Host.exe `
+            installer/obj/stage/Release/tray/PrintAgent.Tray.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Empacotar .msi
+        run: >
+          dotnet build installer/PrintAgent.Installer.wixproj --configuration Release
+          -p:Version=${{ steps.version.outputs.value }} -p:SkipAgentPublish=true
+
+      - name: Assinar .msi
+        if: steps.cert.outputs.pfx != ''
+        shell: pwsh
+        env:
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /f '${{ steps.cert.outputs.pfx }}' /p $env:SIGNING_CERT_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+            installer/bin/Release/DiskPratoPrintAgent.msi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Renomear com a versão
+        id: artifact
+        shell: pwsh
+        run: |
+          $name = 'DiskPratoPrintAgent-${{ steps.version.outputs.value }}.msi'
+          Move-Item installer/bin/Release/DiskPratoPrintAgent.msi "installer/bin/Release/$name"
+          "path=installer/bin/Release/$name" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi
+          path: ${{ steps.artifact.outputs.path }}
+
+      - name: GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.artifact.outputs.path }}
+          generate_release_notes: true

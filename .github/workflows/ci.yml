@@ -22,3 +22,18 @@ jobs:
 
       - name: Test
         run: dotnet test --no-build --configuration Release
+
+  # Job separado: o .msi publica os dois .exe self-contained (~190 MB) e leva
+  # minutos. O installer/ está fora da PrintAgent.slnx justamente para não
+  # pesar no build+test, mas quebra de .wxs precisa aparecer no CI.
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build .msi
+        run: dotnet build installer/PrintAgent.Installer.wixproj --configuration Release

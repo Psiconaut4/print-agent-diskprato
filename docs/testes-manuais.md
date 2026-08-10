@@ -352,6 +352,78 @@ local via `DLE EOT` que o Tray já expõe.
 
 ---
 
+## 5. Instalador `.msi` em VM Windows limpa (Fase 7)
+
+Critério de aceite do plano §8 Fase 7: "`.msi` instala numa VM Windows
+limpa, serviço sobe no boot, desinstalar não deixa serviço órfão nem
+arquivo em `%ProgramData%`". **Nunca executado** — precisa de uma VM, não
+da máquina de desenvolvimento (que já tem .NET, já tem a pasta
+`%ProgramData%\DiskPrato` populada por rodadas anteriores e cujo estado
+mascararia justamente o que o teste quer provar).
+
+### Gerar o pacote
+
+```powershell
+dotnet build installer/PrintAgent.Installer.wixproj -c Release
+# -> installer/bin/Release/DiskPratoPrintAgent.msi
+```
+
+O `installer/` está fora da `PrintAgent.slnx` de propósito (publica ~190 MB
+self-contained a cada build), então `dotnet build` na raiz **não** gera o
+`.msi`.
+
+### Passos
+
+1. VM Windows 11 x64 limpa, **sem** .NET instalado — o pacote é
+   self-contained justamente para não depender disso.
+2. Instalar com duplo clique. Aceitar a licença, concluir com o checkbox
+   "Abrir a configuração do Print Agent" marcado.
+3. Conferir logo após instalar:
+   - `Get-Service DiskPratoPrintAgent` → `Running`, `StartType Automatic`.
+   - `sc.exe qfailure DiskPratoPrintAgent` → três ações `RESTART -- 60000`
+     e `RESET_PERIOD 86400`.
+   - `Get-Acl C:\ProgramData\DiskPrato\PrintAgent | Format-List` → só
+     `SYSTEM` e `BUILTIN\Administradores`, herança desativada
+     (`AreAccessRulesProtected` = `True`).
+   - A janela de configuração do Tray abriu sozinha e o ícone está na
+     bandeja.
+   - Atalho "DiskPrato Print Agent" no menu Iniciar, com o ícone certo.
+4. **Reiniciar a VM.** O serviço tem que voltar sozinho e o ícone da
+   bandeja tem que aparecer no login (entrada em
+   `HKLM\...\CurrentVersion\Run`). Testar com um segundo usuário local
+   também — o `Run` é HKLM justamente para o operador do balcão, que não é
+   quem instalou.
+5. Parear, configurar impressora e imprimir cupom de teste — a partir daqui
+   é o roteiro do §3, mas agora saindo de uma instalação de verdade.
+6. **Upgrade in-place:** buildar com `-p:Version=1.0.1`, instalar por cima
+   e conferir que o `deviceId` e a impressora configurada sobreviveram
+   (`agent.json` não é gravado pelo MSI de propósito) e que não pediu
+   reboot — o `util:CloseApplication` fecha o tray antes.
+7. **Desinstalar** pelo Painel de Controle / Aplicativos e Recursos e
+   conferir:
+   - `Get-Service DiskPratoPrintAgent` → não existe mais.
+   - `C:\Program Files\DiskPrato` → não existe mais.
+   - `C:\ProgramData\DiskPrato` → não existe mais (o `util:RemoveFolderEx`
+     apaga a fila, o `agent.json` e o `device.dat`, que nascem em runtime e
+     o MSI não conhece).
+   - A entrada em `HKLM\...\CurrentVersion\Run` sumiu.
+   - Nenhum atalho sobrando no menu Iniciar.
+
+### Critério de sucesso
+
+Todos os itens dos passos 3, 4, 6 e 7 conferem, e o passo 5 chega ao cupom
+impresso sem abrir terminal nem editar arquivo.
+
+### O que este teste não cobre
+
+Assinatura de código: o `.msi` local sai sem assinar. Quem assina é o
+`release.yml`, e só quando os secrets `SIGNING_CERT_PFX_BASE64` e
+`SIGNING_CERT_PASSWORD` existirem no repositório. Enquanto não existirem, o
+SmartScreen vai avisar "editor desconhecido" na VM — esperado, não é falha
+do pacote.
+
+---
+
 ## Depois de validar
 
 Atualize `docs/plan/PRINT-AGENT-REPO.md §0`: mova o item correspondente de

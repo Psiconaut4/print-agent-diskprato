@@ -3,7 +3,17 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UserSecretsId>dotnet-PrintAgent.Host-572eb9c7-5776-451b-bb51-baba282eb744</UserSecretsId>
+    <ApplicationIcon>..\..\resources\icon-16-256.ico</ApplicationIcon>
+    <AssemblyTitle>DiskPrato Print Agent Service</AssemblyTitle>
+    <Product>DiskPrato Print Agent</Product>
+    <Company>DiskPrato</Company>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Não vai para o .msi: appsettings.Development.json só existe para
+         rodar o Worker como console na máquina de dev. -->
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />

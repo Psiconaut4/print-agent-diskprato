@@ -1,0 +1,54 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <OutputName>DiskPratoPrintAgent</OutputName>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <!-- ICE43/ICE57 exigem KeyPath em HKCU para componentes com atalho não
+         anunciado. Vale para pacote perUser; aqui o pacote é perMachine
+         (ALLUSERS=1) e o atalho vai para o menu Iniciar de Todos os Usuários
+         de propósito — o operador do balcão não é necessariamente quem
+         instalou. Um KeyPath em HKCU faria o atalho existir só para o
+         instalador. -->
+    <SuppressIces>ICE43;ICE57</SuppressIces>
+    <!-- Fora da PrintAgent.slnx de propósito: o build do .msi publica os dois
+         executáveis self-contained (~190 MB), o que tornaria `dotnet build`
+         e `dotnet test` na raiz lentos demais para o loop de desenvolvimento.
+         Buildar com:
+           dotnet build installer/PrintAgent.Installer.wixproj -c Release -->
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <StageDir>$(MSBuildThisFileDirectory)obj\stage\$(Configuration)\</StageDir>
+    <DefineConstants>HostDir=$(StageDir)host\;TrayDir=$(StageDir)tray\;ResourcesDir=$(MSBuildThisFileDirectory)..\resources\;LicenseRtf=$(MSBuildThisFileDirectory)License.rtf;AgentVersion=$(Version)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+  <!-- Publish self-contained single-file (plano §2: a máquina da loja não tem
+       runtime instalado). RemoveProperties impede que Platform/OutputType do
+       wixproj (x64/Package) vazem para os csproj e quebrem o publish.
+
+       SkipAgentPublish=true: o release.yml publica os .exe por fora, assina
+       cada um e só então empacota — republicar aqui sobrescreveria as
+       assinaturas. -->
+  <Target Name="PublishAgentBinaries" BeforeTargets="BeforeBuild" Condition="'$(SkipAgentPublish)' != 'true'">
+    <PropertyGroup>
+      <_PublishProps>Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;IncludeNativeLibrariesForSelfExtract=true;DebugType=none</_PublishProps>
+    </PropertyGroup>
+
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\src\PrintAgent.Host\PrintAgent.Host.csproj"
+             Targets="Publish"
+             Properties="$(_PublishProps);PublishDir=$(StageDir)host\"
+             RemoveProperties="Platform;PlatformTarget;OutputName;OutputType;InstallerPlatform;TargetFramework" />
+
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\src\PrintAgent.Tray\PrintAgent.Tray.csproj"
+             Targets="Publish"
+             Properties="$(_PublishProps);PublishDir=$(StageDir)tray\"
+             RemoveProperties="Platform;PlatformTarget;OutputName;OutputType;InstallerPlatform;TargetFramework" />
+  </Target>
+
+</Project>

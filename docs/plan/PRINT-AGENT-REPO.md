@@ -10,7 +10,7 @@ descreve como o agente o consome. Quando os dois divergirem, o OpenAPI vence.
 
 ---
 
-## 0. Status atual (atualizado em 2026-08-08)
+## 0. Status atual (atualizado em 2026-08-10)
 
 Progresso frente às fases descritas em §8. Cada commit corresponde a um
 bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
@@ -25,7 +25,7 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
 | 3 — API do backend | `PrintAgent.Transport` (HTTP + SSE) | ✅ feito (`feat(transport)`) |
 | 4 — Worker Service | `PrintAgent.Host` | ✅ feito (`feat(host)`) — fila local em arquivo desde o refactor de 2026-08-08 |
 | 6 — tray/setup | `PrintAgent.Tray` | ✅ feito (`feat(tray)`) — pendente validação manual (ver abaixo) |
-| 7 — instalador | WiX | ⏳ não iniciado |
+| 7 — instalador | WiX | ✅ feito (`feat(installer)`) — pendente validação em VM limpa |
 | 8 — endurecimento | Serilog, diagnóstico | ⏳ não iniciado |
 
 **O que foi decidido/ajustado em relação ao texto original do plano:**
@@ -621,7 +621,65 @@ Tray está inteiro validado — não sobra nenhum item de UI pendente. O que
 ainda não tem validação é só o que depende de hardware térmico real
 (`docs/testes-manuais.md` §2 e §4), que continua sem equipamento.
 
-**Próximo passo:** Fase 7 (instalador WiX) — `installer/` está vazio.
+**Fase 7 (instalador WiX) feita em 2026-08-10.** `installer/Package.wxs` +
+`installer/PrintAgent.Installer.wixproj` (WiX v5, `.msi` perMachine x64) e
+`.github/workflows/release.yml` (tag `v*` → `.msi` assinado no GitHub
+Release). O que o pacote entrega:
+
+- **Serviço** `DiskPratoPrintAgent`, `LocalSystem`, start automático, com
+  `util:ServiceConfig` reiniciando o processo em qualquer uma das três
+  primeiras falhas (60 s de espera, contador zerado a cada dia) —
+  o serviço vive de uma conexão SSE longa e ninguém no balcão vai
+  reiniciá-lo à mão.
+- **Tray** no `Run` do **HKLM**, não HKCU: a instalação é perMachine e o
+  operador que loga no balcão não é necessariamente quem instalou. Mesmo
+  motivo para o atalho ir no menu Iniciar de Todos os Usuários — o que
+  dispara ICE43/ICE57 (regras escritas para pacote perUser) e obriga o
+  `SuppressIces` no `.wixproj`; o `ALLUSERS=1` gravado no `.msi` confirma
+  que é falso positivo.
+- **ACL do `%ProgramData%\DiskPrato\PrintAgent`** restrita a `SYSTEM` +
+  `Administrators` via `util:PermissionEx`, que substitui a DACL, corta a
+  herança e resolve os nomes por SID — o `<Permission>` nativo do MSI faria
+  `LookupAccountName` e quebraria em Windows pt-BR ("Administradores").
+  Sem isso o `device.dat` protegido com `DataProtectionScope.LocalMachine`
+  seria decifrável por qualquer usuário local (§7.2).
+- **Desinstalação limpa:** `ServiceControl` remove o serviço, e
+  `util:RemoveFolderEx` apaga a fila/`agent.json`/`device.dat`, que nascem
+  em runtime e o MSI não conhece. A propriedade com o caminho é montada a
+  partir de `[CommonAppDataFolder]`, não do ID `DATAFOLDER`: a ação roda
+  antes do `CostFinalize`, quando diretórios customizados ainda não foram
+  resolvidos.
+- `util:CloseApplication` fecha o tray antes de mexer nos arquivos; sem
+  isso, upgrade e desinstalação caem em "arquivo em uso"/pedido de reboot.
+- Publish self-contained single-file dos dois `.exe` (plano §2). O
+  `installer/` fica **fora** da `PrintAgent.slnx` de propósito — são ~190 MB
+  publicados a cada build, que tornariam `dotnet build`/`dotnet test` na
+  raiz inviáveis no loop de desenvolvimento. Um job separado no `ci.yml`
+  monta o `.msi` para que quebra de `.wxs` apareça mesmo assim.
+- `resources/icon-256.ico` (arte de origem, só o frame 256) gerou
+  `resources/icon-16-256.ico` via `resources/build-icon.ps1` — a ARP e o
+  atalho do menu Iniciar precisam dos tamanhos pequenos. É esse que vira
+  `ARPPRODUCTICON` e `ApplicationIcon` dos dois `.exe`.
+- A versão passou a viver em `Directory.Build.props` (`<Version>`), lida
+  tanto pelos `.exe` quanto pelo `ProductVersion` do `.msi`.
+- Assinatura de código no `release.yml` é condicional aos secrets
+  `SIGNING_CERT_PFX_BASE64`/`SIGNING_CERT_PASSWORD`: sem eles o workflow
+  gera o `.msi` sem assinar, em vez de falhar. Assina os dois `.exe`
+  **antes** de empacotar (daí o `SkipAgentPublish` no `.wixproj`, que
+  impede o republish de sobrescrever as assinaturas) e o `.msi` depois.
+
+Ainda não validado: instalação/desinstalação numa VM Windows limpa
+(critério de aceite do §8 Fase 7) — roteirizado em
+`docs/testes-manuais.md` §5.
+
+**Também em 2026-08-10:** o default de `AgentConfig.ApiBaseUrl` passou de
+`https://api.diskprato.com` para `https://api.psiconaut4.com.br` (túnel
+Cloudflare) enquanto o backend está em fase de teste. O default só vale
+para `agent.json` recém-criado; assim que o arquivo existe, o valor gravado
+nele manda.
+
+**Próximo passo:** Fase 8 (Serilog com rotação, exportar diagnóstico,
+auto-teste na inicialização).
 
 ---
 
@@ -692,10 +750,16 @@ diskprato-print-agent/
     PrintAgent.Core.Tests/     # golden bytes do ESC/POS
     PrintAgent.Transport.Tests/# SSE contra servidor fake
     PrintAgent.Printing.Tests/ # impressora de rede fake, porta FILE:
-  installer/
+  resources/
+    icon-256.ico               # arte de origem (só o frame 256x256)
+    icon-16-256.ico            # gerado por build-icon.ps1 — ARP, atalho, .exe
+    build-icon.ps1
+  installer/                   # fora da .slnx: publica ~190 MB por build
     PrintAgent.Installer.wixproj
+    Package.wxs
+    License.rtf
   .github/workflows/
-    ci.yml                     # build + test em cada push
+    ci.yml                     # build + test em cada push (+ job do .msi)
     release.yml                # tag → .msi assinado no GitHub Release
 ```
 

@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!--
+    Instalador do DiskPrato Print Agent (plano §8, Fase 7).
+
+    Entrega: serviço do Windows com start automático e recuperação em caso de
+    crash, tray no startup, ACL restrita no %ProgramData% (plano §7.2) e
+    desinstalação que não deixa serviço órfão nem arquivo para trás.
+  -->
+  <Package Name="DiskPrato Print Agent"
+           Manufacturer="DiskPrato"
+           Version="$(var.AgentVersion)"
+           UpgradeCode="6C239F90-40BA-4EA1-8681-4B92278C123F"
+           Scope="perMachine"
+           Compressed="yes"
+           InstallerVersion="500"
+           Language="1046"
+           Codepage="1252">
+
+    <SummaryInformation Description="Agente de impressão de comandas do DiskPrato" Manufacturer="DiskPrato" />
+
+    <!-- Upgrade in-place: desinstala a versão antiga cedo, com o serviço já
+         parado pelo ServiceControl da versão antiga. -->
+    <MajorUpgrade DowngradeErrorMessage="Uma versão mais recente do DiskPrato Print Agent já está instalada." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Launch Condition="VersionNT64" Message="O DiskPrato Print Agent só roda em Windows 64 bits." />
+
+    <!-- Multi-resolução (16..256): a ARP e o atalho do menu Iniciar pedem os
+         tamanhos pequenos; o icon-256.ico original só tem o frame de 256. -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.ResourcesDir)icon-16-256.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://psiconaut4.com.br" />
+
+    <!-- O tray segura o próprio .exe aberto; sem fechá-lo, upgrade e
+         desinstalação caem em "arquivo em uso" / pedido de reboot. -->
+    <util:CloseApplication Id="CloseTray"
+                           Target="PrintAgent.Tray.exe"
+                           CloseMessage="yes"
+                           TerminateProcess="0"
+                           RebootPrompt="no"
+                           Timeout="10" />
+
+    <Feature Id="Main" Title="DiskPrato Print Agent" Level="1" AllowAbsent="no" AllowAdvertise="no">
+      <ComponentGroupRef Id="AgentComponents" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <!-- Checkbox na última tela: abre a configuração logo após instalar, para
+         que a instalação limpa chegue ao cupom de teste sem abrir terminal. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Abrir a configuração do Print Agent" />
+    <Property Id="WixShellExecTarget" Value="[#TrayExe]" />
+    <CustomAction Id="LaunchTray" BinaryRef="Wix4UtilCA_X64" DllEntry="WixShellExec" Impersonate="yes" Return="ignore" />
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchTray"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="CompanyFolder" Name="DiskPrato">
+        <Directory Id="INSTALLFOLDER" Name="Print Agent" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DataCompanyFolder" Name="DiskPrato">
+        <Directory Id="DATAFOLDER" Name="PrintAgent" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="AgentComponents">
+
+      <!-- Serviço. Type=ownProcess + LocalSystem porque o DPAPI do token usa
+           DataProtectionScope.LocalMachine e o spooler RAW precisa de acesso
+           às filas de impressão da máquina (plano §7.2, §4.1). -->
+      <Component Id="HostExe" Directory="INSTALLFOLDER" Bitness="always64">
+        <File Id="HostExe" Source="$(var.HostDir)PrintAgent.Host.exe" KeyPath="yes" />
+
+        <ServiceInstall Id="AgentService"
+                        Name="DiskPratoPrintAgent"
+                        DisplayName="DiskPrato Print Agent"
+                        Description="Recebe pedidos do DiskPrato e imprime as comandas na impressora térmica."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Vital="yes">
+          <!-- Recuperação: o serviço vive de uma conexão SSE de longa duração;
+               se o processo morrer, ninguém no balcão vai reiniciá-lo à mão. -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="60"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+
+        <ServiceControl Id="AgentServiceControl"
+                        Name="DiskPratoPrintAgent"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <Component Id="HostAppSettings" Directory="INSTALLFOLDER" Bitness="always64">
+        <File Id="HostAppSettings" Source="$(var.HostDir)appsettings.json" KeyPath="yes" />
+      </Component>
+
+      <Component Id="TrayExe" Directory="INSTALLFOLDER" Bitness="always64">
+        <!-- O atalho mora no componente do próprio .exe: numa instalação
+             perMachine o ProgramMenuFolder é o menu de Todos os Usuários, e
+             um componente separado ali cairia nos ICE38/43/57 (que tratam o
+             menu Iniciar como dado por usuário). Aninhado dentro do <File>,
+             não do <Component>: solto no componente, o Target vira o
+             diretório ([INSTALLFOLDER]) em vez do .exe. -->
+        <File Id="TrayExe" Source="$(var.TrayDir)PrintAgent.Tray.exe" KeyPath="yes">
+          <Shortcut Id="TrayShortcut"
+                    Directory="ProgramMenuFolder"
+                    Name="DiskPrato Print Agent"
+                    Description="Configuração do agente de impressão do DiskPrato"
+                    Advertise="no"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon.ico"
+                    IconIndex="0" />
+        </File>
+      </Component>
+
+      <!-- Tray no startup. HKLM (não HKCU) porque a instalação é perMachine:
+           qualquer operador que logar no balcão precisa do ícone. -->
+      <Component Id="TrayAutostart" Directory="INSTALLFOLDER" Bitness="always64"
+                 Guid="DAB9E6DF-3DD7-4B26-8828-A001A9D53D0D">
+        <RegistryValue Root="HKLM"
+                       Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                       Name="DiskPratoPrintAgent"
+                       Type="string"
+                       Value="&quot;[INSTALLFOLDER]PrintAgent.Tray.exe&quot;"
+                       KeyPath="yes" />
+      </Component>
+
+      <!-- %ProgramData%\DiskPrato\PrintAgent: fila, agent.json e device.dat.
+           A ACL é restrita a SYSTEM + Administradores porque o token é
+           protegido com DataProtectionScope.LocalMachine — qualquer usuário
+           que consiga ler device.dat consegue decifrá-lo (plano §7.2).
+           util:PermissionEx substitui a DACL e corta a herança, e resolve
+           SYSTEM/Administrators por SID (imune a Windows localizado). -->
+      <Component Id="DataFolder" Directory="DATAFOLDER" Bitness="always64"
+                 Guid="1B0F3E9C-6C6E-4E31-9C1D-6E9C2A4F7B21">
+        <CreateFolder>
+          <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+          <util:PermissionEx User="Administrators" GenericAll="yes" />
+        </CreateFolder>
+
+        <!-- Fila, agent.json e device.dat nascem em runtime; o MSI não os
+             conhece. Sem isso a desinstalação deixaria a pasta para trás. -->
+        <util:RemoveFolderEx On="uninstall" Property="DISKPRATO_DATA_PATH" />
+        <RemoveFolder Id="RemoveDataFolder" Directory="DATAFOLDER" On="uninstall" />
+        <RemoveFolder Id="RemoveDataCompanyFolder" Directory="DataCompanyFolder" On="uninstall" />
+      </Component>
+
+    </ComponentGroup>
+
+    <!-- RemoveFolderEx lê a propriedade antes do CostFinalize, quando os IDs de
+         diretório customizados ainda não foram resolvidos — daí montar o
+         caminho a partir de CommonAppDataFolder, que já está preenchido. -->
+    <SetProperty Id="DISKPRATO_DATA_PATH" Value="[CommonAppDataFolder]DiskPrato\PrintAgent" Before="CostFinalize" />
+  </Fragment>
+
+</Wix>
