@@ -1084,5 +1084,3 @@ sem saber nada sobre categorias, produtos ou regras de roteamento.
 - Linux/ARM (Raspberry Pi na cozinha). O deployment self-contained do .NET
   cobre isso quando for a hora; a abstração `IPrinterTransport` já isola o
   que muda (lá o caminho seria CUPS ou socket direto, não o spooler).
-- Comprovante de pagamento com cartão — o fluxo é 100% Stripe, sem
-  maquininha local.
