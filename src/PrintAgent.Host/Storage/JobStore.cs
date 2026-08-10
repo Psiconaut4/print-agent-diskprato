@@ -135,6 +135,19 @@ public sealed class JobStore
         }
     }
 
+    /// <summary>
+    /// Descarta um job terminal da fila local sem confirmar nada (plano §6.6:
+    /// 404 no ack → o backend não conhece mais este job, não há o que
+    /// confirmar). Sem isto, um job órfão em <c>printed/</c>/<c>failed/</c>
+    /// ficaria sendo re-tentado pelo <c>AckFlusher</c> para sempre, já que
+    /// <see cref="MarkAcked"/> só é chamado no caminho de sucesso.
+    /// </summary>
+    public void Discard(string jobId)
+    {
+        TryDelete(PrintedPath(jobId));
+        TryDelete(FailedPath(jobId));
+    }
+
     /// <summary>Estourou o teto de tentativa do <c>AckFlusher</c> para este job — fica pendente pra próxima rodada.</summary>
     public void RecordAckAttemptFailure(string jobId, string? error)
     {

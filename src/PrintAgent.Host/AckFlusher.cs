@@ -63,9 +63,20 @@ public sealed class AckFlusher(JobStore jobStore, JobsApiClient jobsApi, ILogger
         try
         {
             var outcome = await jobsApi.AckJobAsync(jobId, ack, attemptCts.Token).ConfigureAwait(false);
-            if (outcome == AckOutcome.Acknowledged)
+            switch (outcome)
             {
-                jobStore.MarkAcked(jobId);
+                case AckOutcome.Acknowledged:
+                    jobStore.MarkAcked(jobId);
+                    break;
+
+                case AckOutcome.JobNotFound:
+                    // 404: o backend nao conhece mais este job (orfao, ex.:
+                    // fila local sobreviveu a um reset do backend). Nao ha o
+                    // que confirmar — descarta em vez de re-tentar pra sempre
+                    // em silencio (plano §6.6).
+                    logger.LogWarning("Ack de {JobId} devolveu 404; job descartado da fila local.", jobId);
+                    jobStore.Discard(jobId);
+                    break;
             }
 
             return true;
