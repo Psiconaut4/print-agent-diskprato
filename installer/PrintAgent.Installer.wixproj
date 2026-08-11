@@ -28,6 +28,15 @@
     <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
   </ItemGroup>
 
+  <!-- License.rtf é gerado de License.txt, não editado à mão: a tela de termos
+       do MSI é um RichEdit, que aborta em silêncio no primeiro escape RTF
+       malformado e mostra o resto em branco. O script regenera o arquivo e
+       depois confere, num RichEdit de verdade, que o texto renderizado bate com
+       a fonte — build falha se a licença voltar a sair truncada. -->
+  <Target Name="BuildLicenseRtf" BeforeTargets="BeforeBuild">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)build-license.ps1&quot;" />
+  </Target>
+
   <!-- Publish self-contained single-file (plano §2: a máquina da loja não tem
        runtime instalado). RemoveProperties impede que Platform/OutputType do
        wixproj (x64/Package) vazem para os csproj e quebrem o publish.

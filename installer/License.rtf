@@ -1,16 +1,31 @@
 {\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fswiss\fcharset0 Segoe UI;}}
-\viewkind4\uc1\pard\f0\fs20
-\b Termos de uso \endash  DiskPrato Print Agent\b0\par
+\viewkind4\uc1\pard\f0\fs18
+\b Termos de uso \'97 DiskPrato Print Agent\b0\par
 \par
-Este software \'e fornecido pela DiskPrato para uso nos estabelecimentos clientes da plataforma DiskPrato, com a finalidade de receber pedidos e imprimir comandas em impressora t\'ermica.\par
+Este documento rege o uso do DiskPrato Print Agent ("agente"), o programa que recebe os pedidos feitos na plataforma DiskPrato e os imprime na impressora t\'e9rmica do estabelecimento. Ao instalar o agente, o estabelecimento declara concordar com estes termos.\par
 \par
-\b 1. Licen\'e7a.\b0  A DiskPrato concede ao estabelecimento uma licen\'e7a n\'e3o exclusiva e intransfer\'edvel para instalar e usar este agente nos computadores do pr\'f3prio estabelecimento enquanto durar sua rela\'e7\'e3o contratual com a plataforma.\par
+\b 1. Licen\'e7a de uso.\b0  A DiskPrato concede ao estabelecimento uma licen\'e7a n\'e3o exclusiva, intransfer\'edvel e revog\'e1vel para instalar e usar o agente nos computadores do pr\'f3prio estabelecimento, enquanto durar sua rela\'e7\'e3o contratual com a plataforma DiskPrato. N\'e3o \'e9 permitido redistribuir, sublicenciar, vender ou fazer engenharia reversa do agente.\par
 \par
-\b 2. Dados.\b0  O agente armazena localmente, em %ProgramData%\\DiskPrato\\PrintAgent, a configura\'e7\'e3o da impressora, o token do dispositivo e a fila de comandas pendentes. Ele n\'e3o transmite esses dados a terceiros.\par
+\b 2. Do que o agente precisa.\b0  O agente \'e9 um servi\'e7o do Windows que roda em segundo plano e exige Windows 10 ou superior, 64 bits, acesso \'e0 internet e uma impressora t\'e9rmica ESC/POS \'97 conectada por uma fila de impress\'e3o do Windows ou por rede (IP:porta). O agente convive com o sistema de PDV j\'e1 instalado e n\'e3o assume uso exclusivo da impressora.\par
 \par
-\b 3. Sem garantia.\b0  O software \'e9 fornecido "no estado em que se encontra", sem garantias de qualquer natureza. A DiskPrato n\'e3o se responsabiliza por danos decorrentes de falha de impress\'e3o, indisponibilidade de rede ou defeito de hardware de impressora.\par
+\b 3. Pareamento.\b0  Para funcionar, o agente precisa ser pareado ao estabelecimento com um c\'f3digo gerado no painel do DiskPrato. O pareamento resulta num token de dispositivo, guardado apenas nesta m\'e1quina. Quem tiver esse token pode receber os pedidos do estabelecimento: mantenha o computador do balc\'e3o sob controle de pessoas autorizadas.\par
 \par
-\b 4. Desinstala\'e7\'e3o.\b0  A desinstala\'e7\'e3o remove o servi\'e7o, os arquivos de programa e os dados locais do agente.\par
+\b 4. Dados tratados.\b0  Para imprimir, o agente recebe da plataforma DiskPrato os dados de cada pedido, incluindo dados pessoais do cliente (nome, telefone e, nas entregas, o endere\'e7o). O agente guarda localmente, em %ProgramData%\\DiskPrato\\PrintAgent, a configura\'e7\'e3o da impressora, o token do dispositivo e a fila de comandas \'97 os pedidos j\'e1 impressos s\'e3o apagados automaticamente ap\'f3s 7 dias. A comunica\'e7\'e3o com a plataforma DiskPrato \'e9 feita por HTTPS e limita-se a receber pedidos e devolver confirma\'e7\'f5es de impress\'e3o e estado da impressora. O agente n\'e3o envia esses dados a nenhum terceiro, n\'e3o coleta dados de outros programas da m\'e1quina e n\'e3o instala componentes de publicidade ou rastreamento.\par
 \par
-Ao prosseguir com a instala\'e7\'e3o, o estabelecimento declara concordar com estes termos.\par
+\b 5. Diagn\'f3stico.\b0  A tela de configura\'e7\'e3o oferece um bot\'e3o para exportar um pacote de diagn\'f3stico. Esse pacote cont\'e9m a configura\'e7\'e3o, os registros de funcionamento e as \'faltimas comandas da fila local \'97 portanto, dados de pedidos e de clientes. O token do dispositivo nunca \'e9 inclu\'eddo. O arquivo \'e9 gerado apenas quando solicitado, fica sob guarda do estabelecimento, e cabe a ele decidir compartilh\'e1-lo com o suporte.\par
+\par
+\b 6. Registros de funcionamento.\b0  O agente grava registros locais de opera\'e7\'e3o, mantidos por 7 dias e depois descartados automaticamente. Eles servem ao diagn\'f3stico de falhas de impress\'e3o e n\'e3o saem da m\'e1quina por conta pr\'f3pria.\par
+\par
+\b 7. Responsabilidades do estabelecimento.\b0  Cabe ao estabelecimento manter a impressora ligada, abastecida de papel e acess\'edvel na rede, manter o computador do balc\'e3o ligado durante o hor\'e1rio de funcionamento, e conferir os pedidos no painel do DiskPrato sempre que houver falha de impress\'e3o. O agente n\'e3o substitui a confer\'eancia dos pedidos no painel.\par
+\par
+\b 8. Atualiza\'e7\'f5es.\b0  A DiskPrato pode disponibilizar novas vers\'f5es do agente com corre\'e7\'f5es e melhorias. Vers\'f5es muito antigas podem deixar de ser aceitas pela plataforma, caso em que a atualiza\'e7\'e3o passa a ser necess\'e1ria para continuar imprimindo.\par
+\par
+\b 9. Aus\'eancia de garantia.\b0  O agente \'e9 fornecido "no estado em que se encontra", sem garantias de qualquer natureza, expressas ou impl\'edcitas. A DiskPrato n\'e3o se responsabiliza por preju\'edzos decorrentes de falha de impress\'e3o, indisponibilidade de rede ou de energia, defeito, desligamento ou falta de insumos da impressora, nem por configura\'e7\'e3o incorreta feita no estabelecimento.\par
+\par
+\b 10. Componentes de terceiros.\b0  O agente incorpora componentes de software livre, entre eles o .NET Runtime (Licen\'e7a MIT, Microsoft) e o Serilog (Licen\'e7a Apache 2.0). Esses componentes permanecem sujeitos \'e0s suas pr\'f3prias licen\'e7as, e nada nestes termos as restringe.\par
+\par
+\b 11. Vig\'eancia e desinstala\'e7\'e3o.\b0  Estes termos vigoram enquanto o agente estiver instalado. O estabelecimento pode desinstal\'e1-lo a qualquer momento pelo painel "Aplicativos" do Windows; a desinstala\'e7\'e3o remove o servi\'e7o, os arquivos de programa e os dados locais do agente, inclusive a fila de comandas ainda n\'e3o impressas.\par
+\par
+\b 12. Lei aplic\'e1vel.\b0  Estes termos s\'e3o regidos pelas leis da Rep\'fablica Federativa do Brasil.\par
+\par
 }

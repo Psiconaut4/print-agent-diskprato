@@ -1,0 +1,77 @@
+# Termos de uso — DiskPrato Print Agent
+
+Este documento rege o uso do DiskPrato Print Agent ("agente"), o programa que
+recebe os pedidos feitos na plataforma DiskPrato e os imprime na impressora
+térmica do estabelecimento. Ao instalar o agente, o estabelecimento declara
+concordar com estes termos.
+
+**1. Licença de uso.** A DiskPrato concede ao estabelecimento uma licença não
+exclusiva, intransferível e revogável para instalar e usar o agente nos
+computadores do próprio estabelecimento, enquanto durar sua relação contratual
+com a plataforma DiskPrato. Não é permitido redistribuir, sublicenciar, vender
+ou fazer engenharia reversa do agente.
+
+**2. Do que o agente precisa.** O agente é um serviço do Windows que roda em
+segundo plano e exige Windows 10 ou superior, 64 bits, acesso à internet e uma
+impressora térmica ESC/POS — conectada por uma fila de impressão do Windows ou
+por rede (IP:porta). O agente convive com o sistema de PDV já instalado e não
+assume uso exclusivo da impressora.
+
+**3. Pareamento.** Para funcionar, o agente precisa ser pareado ao
+estabelecimento com um código gerado no painel do DiskPrato. O pareamento
+resulta num token de dispositivo, guardado apenas nesta máquina. Quem tiver esse
+token pode receber os pedidos do estabelecimento: mantenha o computador do
+balcão sob controle de pessoas autorizadas.
+
+**4. Dados tratados.** Para imprimir, o agente recebe da plataforma DiskPrato os
+dados de cada pedido, incluindo dados pessoais do cliente (nome, telefone e, nas
+entregas, o endereço). O agente guarda localmente, em
+%ProgramData%\DiskPrato\PrintAgent, a configuração da impressora, o token do
+dispositivo e a fila de comandas — os pedidos já impressos são apagados
+automaticamente após 7 dias. A comunicação com a plataforma DiskPrato é feita
+por HTTPS e limita-se a receber pedidos e devolver confirmações de impressão e
+estado da impressora. O agente não envia esses dados a nenhum terceiro, não
+coleta dados de outros programas da máquina e não instala componentes de
+publicidade ou rastreamento.
+
+**5. Diagnóstico.** A tela de configuração oferece um botão para exportar um
+pacote de diagnóstico. Esse pacote contém a configuração, os registros de
+funcionamento e as últimas comandas da fila local — portanto, dados de pedidos e
+de clientes. O token do dispositivo nunca é incluído. O arquivo é gerado apenas
+quando solicitado, fica sob guarda do estabelecimento, e cabe a ele decidir
+compartilhá-lo com o suporte.
+
+**6. Registros de funcionamento.** O agente grava registros locais de operação,
+mantidos por 7 dias e depois descartados automaticamente. Eles servem ao
+diagnóstico de falhas de impressão e não saem da máquina por conta própria.
+
+**7. Responsabilidades do estabelecimento.** Cabe ao estabelecimento manter a
+impressora ligada, abastecida de papel e acessível na rede, manter o computador
+do balcão ligado durante o horário de funcionamento, e conferir os pedidos no
+painel do DiskPrato sempre que houver falha de impressão. O agente não substitui
+a conferência dos pedidos no painel.
+
+**8. Atualizações.** A DiskPrato pode disponibilizar novas versões do agente com
+correções e melhorias. Versões muito antigas podem deixar de ser aceitas pela
+plataforma, caso em que a atualização passa a ser necessária para continuar
+imprimindo.
+
+**9. Ausência de garantia.** O agente é fornecido "no estado em que se
+encontra", sem garantias de qualquer natureza, expressas ou implícitas. A
+DiskPrato não se responsabiliza por prejuízos decorrentes de falha de impressão,
+indisponibilidade de rede ou de energia, defeito, desligamento ou falta de
+insumos da impressora, nem por configuração incorreta feita no estabelecimento.
+
+**10. Componentes de terceiros.** O agente incorpora componentes de software
+livre, entre eles o .NET Runtime (Licença MIT, Microsoft) e o Serilog (Licença
+Apache 2.0). Esses componentes permanecem sujeitos às suas próprias licenças, e
+nada nestes termos as restringe.
+
+**11. Vigência e desinstalação.** Estes termos vigoram enquanto o agente estiver
+instalado. O estabelecimento pode desinstalá-lo a qualquer momento pelo painel
+"Aplicativos" do Windows; a desinstalação remove o serviço, os arquivos de
+programa e os dados locais do agente, inclusive a fila de comandas ainda não
+impressas.
+
+**12. Lei aplicável.** Estes termos são regidos pelas leis da República
+Federativa do Brasil.
