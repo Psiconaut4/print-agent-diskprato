@@ -11,6 +11,13 @@ correspondente ao componente que vai mudar — o documento explica o "porquê"
 por trás de quase toda decisão não trivial (formatos de arquivo, ordem de
 gravação, timeouts, etc.).
 
+> `docs/plan/` **não é versionado** (está no `.gitignore`): o repositório é
+> público e o plano descreve a arquitetura interna do backend. Ele vive na
+> máquina de quem desenvolve. Num clone novo o arquivo não existe — peça a
+> cópia atual antes de mexer em algo que dependa dele. Os comentários do
+> código citam seções dele ("plano §7.2") de propósito; a referência
+> continua válida mesmo com o arquivo fora do git.
+
 ## Estrutura
 
 ```
