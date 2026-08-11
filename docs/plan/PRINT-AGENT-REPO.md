@@ -50,9 +50,11 @@ build em clone limpo**, invisíveis localmente porque `obj/`, `bin/` e
 
 Junto vieram: `global.json` fixando o SDK (o runner usava 10.0.400 e a
 máquina local 10.0.302, e `TreatWarningsAsErrors` torna isso uma
-bomba-relógio); `on: push` do `ci.yml` restrito a `main` (o push de tag
+bomba-relógio); `tags-ignore` no `on: push` do `ci.yml` (o push de tag
 disparava CI e Release ao mesmo tempo, dois publishes de ~190 MB
-concorrendo); guarda no `release.yml` conferindo que o `Directory.Build.props`
+concorrendo — filtrar por `branches: [main]` também resolveria, mas de
+quebra tiraria o CI de todo branch de trabalho); guarda no `release.yml`
+conferindo que o `Directory.Build.props`
 bate com a tag (estavam dessincronizados: `1.0.0` vs `v1.0.1`); `signtool`
 resolvido num passo só, com erro legível quando o SDK falta no runner;
 `AllowSameVersionUpgrades="yes"` no `MajorUpgrade` (com `ICE61` suprimido,

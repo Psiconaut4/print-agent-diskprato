@@ -1,11 +1,11 @@
 name: CI
 
-# Sem filtro de branch, o push de uma tag disparava CI e Release ao mesmo
-# tempo — dois publishes self-contained de ~190 MB concorrendo. Tag é assunto
-# do release.yml.
+# tags-ignore, não branches: o push de uma tag disparava CI e Release ao mesmo
+# tempo — dois publishes self-contained de ~190 MB concorrendo —, e tag é
+# assunto do release.yml. Push em branch continua rodando o CI normalmente.
 on:
   push:
-    branches: [main]
+    tags-ignore: ['**']
   pull_request:
 
 jobs:

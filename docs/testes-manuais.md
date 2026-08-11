@@ -464,7 +464,7 @@ self-contained a cada build), então `dotnet build` na raiz **não** gera o
    quem instalou.
 5. Parear, configurar impressora e imprimir cupom de teste — a partir daqui
    é o roteiro do §3, mas agora saindo de uma instalação de verdade.
-6. **Upgrade in-place:** buildar com `-p:Version=1.0.3`, instalar por cima
+6. **Upgrade in-place:** buildar com `-p:Version=1.0.2`, instalar por cima
    e conferir que o `deviceId` e a impressora configurada sobreviveram
    (`agent.json` não é gravado pelo MSI de propósito) e que não pediu
    reboot — o `util:CloseApplication` fecha o tray antes.
