@@ -212,6 +212,11 @@ no "^" de ícones ocultos do Windows).
   dentro da área útil — nesta tela de 768px de altura ela abriu com 727px
   em vez dos 860 pedidos, com a borda de baixo visível. Minimizar e
   restaurar pela barra de título funciona.
+- [ ] **Exportar diagnóstico** (novo na Fase 8, 2026-08-11): a seção
+  "Suporte" no fim da tela e o item do menu da bandeja abrem o mesmo
+  diálogo de salvar; os dois pontos de entrada precisam gerar o `.zip`.
+  Verificação detalhada do conteúdo no §4, passo 8 — aqui basta confirmar
+  que o arquivo é criado e que o aviso sobre dados de clientes aparece.
 - [ ] **Encerramento:** botão direito no ícone → "Sair" — o ícone some da
   bandeja e o processo do Tray termina; o `Host` continua rodando à parte
   (são processos independentes).
@@ -331,24 +336,75 @@ estação. Detalhe completo (causa raiz, diffs, datas) em
 
 ---
 
-## 4. Hardware físico real (antecipável antes da Fase 8)
+## 4. Hardware físico real — aceite da Fase 8
 
-A Fase 8 formaliza isso ("corte de papel, fim de papel e impressora
-desligada produzem os `errorCode` certos no dashboard"), mas dá pra
-adiantar uma verificação com uma impressora térmica de verdade
-(Elgin i9 ou Epson TM-T20) na rede, já que `PrinterStatus`
-(`Ready`/`Offline`/`PaperOut`/`CoverOpen`) já é lido pelo Tray desde a
-Fase 6. **Nunca executado** — depende de hardware que ainda não foi
-providenciado.
+Critério de aceite do plano §8 Fase 8: "hardware real (Elgin i9 ou Epson
+TM-T20); corte de papel, fim de papel e impressora desligada produzem os
+`errorCode` certos no dashboard". **Nunca executado** — depende de hardware
+que ainda não foi providenciado. É o único item que falta para fechar a
+fase; o código está pronto desde 2026-08-11.
 
-- Com a impressora configurada como `network`, tire o papel e confirme que
-  o resumo do Tray muda pra "sem papel" em até 5s.
-- Abra a tampa e confirme "tampa aberta".
-- Desligue a impressora e confirme "offline".
+Diferente da rodada esboçada antes da Fase 8, agora há três caminhos
+independentes para validar, e cada um pode falhar sozinho:
 
-Isso não passa pelo `StatusReport` que o `Worker` manda pro backend (esse
-ainda é `Unknown` sempre — TODO explícito da Fase 8), só valida a leitura
-local via `DLE EOT` que o Tray já expõe.
+| Caminho | Onde aparece | Origem |
+|---|---|---|
+| Leitura local | resumo do Tray e ícone da bandeja | `IPrinterStatusQuery` (`DLE EOT`) |
+| Estado reportado | `printerState` no dashboard | `StatusReport`, a cada ~5 min |
+| Erro do job | `errorCode` do ack no dashboard | `PrinterSendResult` da tentativa |
+
+### Passos
+
+1. Impressora térmica real na rede, configurada no Tray como `network`
+   (IP:9100). Parear contra o backend de dev e imprimir um cupom de teste
+   para confirmar o caminho feliz antes de quebrar qualquer coisa.
+2. **Fim de papel:** tire o papel e confirme, nesta ordem:
+   - o resumo do Tray muda para "sem papel" em até 5s (polling de 5s);
+   - mande um pedido de verdade e confirme o `errorCode` do ack no
+     dashboard (esperado: `paper_out`);
+   - espere o próximo `StatusReport` (até ~5 min) e confirme
+     `printerState: error` no dashboard.
+3. **Tampa aberta:** abra a tampa e confirme "tampa aberta" no Tray, e de
+   novo `printerState: error` no relatório seguinte.
+4. **Impressora desligada:** desligue e confirme o `errorCode` do ack.
+   Atenção ao que se espera do **Tray** aqui: a impressora de rede que não
+   responde é `Unknown` ("estado desconhecido"), **não** "offline" — decisão
+   da Fase 5, fixada em `NetworkPrinterTransportStatusTests` (plano §5.3:
+   nunca afirmar um estado que não se sabe). "Offline" só aparece quando a
+   impressora responde e sinaliza o bit de offline. Se essa distinção
+   incomodar na prática, é uma mudança de comportamento a discutir, não um
+   bug deste teste.
+5. **Repetir com a impressora pelo spooler** (fila do Windows apontando
+   para a impressora real, não `FILE:`). O `SpoolerPrinterTransport` lê
+   `PRINTER_STATUS_*`, e muitos drivers genéricos não reportam nada — se
+   der `Unknown` em tudo, registre qual driver era: é informação útil, não
+   necessariamente falha.
+
+### Auto-teste e diagnóstico (Fase 8)
+
+Aproveite a mesma rodada, com o hardware ligado:
+
+6. **Auto-teste da inicialização:** reinicie o serviço
+   (`Restart-Service DiskPratoPrintAgent`) e abra o log mais recente em
+   `C:\ProgramData\DiskPrato\PrintAgent\logs\` (precisa de PowerShell como
+   administrador — a ACL é restrita). Deve haver um bloco
+   "Auto-teste da inicializacao" com uma linha por check e a impressora real
+   marcada `[ok]`. Confirme também que **nenhum papel saiu** com o restart.
+7. Repita com a impressora **desligada** e confirme que o bloco continua
+   sendo escrito (o auto-teste nunca impede o serviço de subir) e que a
+   linha da impressora não afirma "pronta".
+8. **Exportar diagnóstico:** no Tray, "Exportar diagnóstico...", salvar na
+   Área de Trabalho. Confirmar:
+   - o `.zip` foi criado **com o usuário logado como dono**, sem elevação;
+   - contém `LEIA-ME.txt`, `diagnostico.json`, `agent.json`, `logs/` e
+     `fila/`;
+   - **não** contém `device.dat`, e o token não aparece em nenhum arquivo;
+   - `diagnostico.json` traz a versão do agente igual à do `.msi`
+     instalado (não `1.0.0` fixo, a menos que essa seja mesmo a versão).
+9. **Rotação do log:** com o agente instalado há mais de um dia, confirmar
+   que existe um arquivo por dia (`printagent-YYYYMMDD.log`) e nenhum com
+   mais de 7 dias. Para não esperar uma semana, dá para antecipar copiando
+   um log com data antiga na pasta e reiniciando o serviço.
 
 ---
 
@@ -376,7 +432,12 @@ self-contained a cada build), então `dotnet build` na raiz **não** gera o
 
 1. VM Windows 11 x64 limpa, **sem** .NET instalado — o pacote é
    self-contained justamente para não depender disso.
-2. Instalar com duplo clique. Aceitar a licença, concluir com o checkbox
+2. Instalar com duplo clique. **Ler a tela de termos de uso antes de
+   aceitar**: ela tem que mostrar o texto inteiro, do título até a cláusula
+   12 ("Lei aplicável"), com acentuação correta. Essa tela ficou em branco
+   (só o título) da Fase 7 até 2026-08-11, e o build não acusava; hoje o
+   `installer/build-license.ps1` valida no build, mas a conferência visual
+   aqui é o que prova a correção ponta a ponta. Concluir com o checkbox
    "Abrir a configuração do Print Agent" marcado.
 3. Conferir logo após instalar:
    - `Get-Service DiskPratoPrintAgent` → `Running`, `StartType Automatic`.
@@ -388,6 +449,14 @@ self-contained a cada build), então `dotnet build` na raiz **não** gera o
    - A janela de configuração do Tray abriu sozinha e o ícone está na
      bandeja.
    - Atalho "DiskPrato Print Agent" no menu Iniciar, com o ícone certo.
+   - `C:\ProgramData\DiskPrato\PrintAgent\logs\printagent-<hoje>.log`
+     existe e já tem o bloco do auto-teste (numa instalação nova, com
+     `[FALHA] Pareamento` e `[FALHA] Impressoras` — é o esperado). Precisa
+     de PowerShell elevado para ler: a pasta herda a ACL restrita.
+   - Sem elevação, "Exportar diagnóstico..." no menu da bandeja salva o
+     `.zip` na Área de Trabalho. É o teste real da impersonação: o operador
+     do balcão não consegue nem listar a pasta de dados, mas consegue gerar
+     o pacote.
 4. **Reiniciar a VM.** O serviço tem que voltar sozinho e o ícone da
    bandeja tem que aparecer no login (entrada em
    `HKLM\...\CurrentVersion\Run`). Testar com um segundo usuário local
@@ -404,8 +473,11 @@ self-contained a cada build), então `dotnet build` na raiz **não** gera o
    - `Get-Service DiskPratoPrintAgent` → não existe mais.
    - `C:\Program Files\DiskPrato` → não existe mais.
    - `C:\ProgramData\DiskPrato` → não existe mais (o `util:RemoveFolderEx`
-     apaga a fila, o `agent.json` e o `device.dat`, que nascem em runtime e
-     o MSI não conhece).
+     apaga a fila, o `agent.json`, o `device.dat` e a pasta `logs/`, que
+     nascem em runtime e o MSI não conhece). O plano §8 Fase 7 admitia
+     deixar os logs para trás "por opção"; a implementação apaga tudo, e é
+     o comportamento que se espera aqui. Um pacote de diagnóstico exportado
+     antes da desinstalação preserva o que interessa.
    - A entrada em `HKLM\...\CurrentVersion\Run` sumiu.
    - Nenhum atalho sobrando no menu Iniciar.
 

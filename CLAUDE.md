@@ -46,32 +46,36 @@ O que `dotnet test` não cobre (Tray, convivência do spooler com hardware
 real, fila local ponta a ponta contra backend real) está roteirizado em
 `docs/testes-manuais.md`.
 
-## Estado atual (2026-08-10)
+## Estado atual (2026-08-11)
 
-Fases 0–7 completas (scaffold, Contracts, EscPosFormatter, os dois
-transportes de impressão, cliente HTTP/SSE, Worker Service, Tray/setup,
-instalador WiX),
-incluindo a Fase 5 — `NetworkPrinterTransport` está implementado e o
-critério de aceite do plano §8 (impressora de rede falsa que recusa a
-segunda conexão simultânea → retry com backoff, sem falha terminal) é
-coberto por teste automatizado em `PrintAgent.Printing.Tests`. O que falta
-da Fase 5 é só confirmação contra hardware térmico real, que o plano trata
-como opcional.
+**Todas as fases do plano estão implementadas** (0–8: scaffold, Contracts,
+EscPosFormatter, os dois transportes de impressão, cliente HTTP/SSE, Worker
+Service, Tray/setup, instalador WiX, endurecimento), mais as três fases de
+roteamento por estação do §10 (contrato v1.1.0 consumido —
+`stationLabel`/`printMode`, `AgentConfig.Printers` como lista por estação, e
+o Tray editando N impressoras).
 
-Também estão implementadas as três fases de roteamento por estação
-(plano §10): contrato v1.1.0 consumido (`stationLabel`/`printMode`),
-`AgentConfig.Printers` como lista por estação, e o Tray editando N
-impressoras.
+Da Fase 5, `NetworkPrinterTransport` está implementado e o critério de aceite
+do plano §8 (impressora de rede falsa que recusa a segunda conexão simultânea
+→ retry com backoff, sem falha terminal) é coberto por teste automatizado em
+`PrintAgent.Printing.Tests`.
 
-**Não iniciada:** Fase 8 (Serilog com rotação, exportar diagnóstico,
-auto-teste; os TODOs estão marcados em `Worker.cs:28` e `Worker.cs:204` —
-`agentVersion` hardcoded e `StatusReport.PrinterState` sempre `Unknown`).
+**O que resta é validação manual, não código:** o aceite da Fase 8 é em
+hardware térmico real (`docs/testes-manuais.md` §2/§4 — corte de papel, fim
+de papel e impressora desligada produzindo os `errorCode` certos) e o da
+Fase 7 é o `.msi` numa VM Windows limpa (§5). O checklist do Tray foi inteiro
+validado em 2026-08-10, incluindo múltiplas estações. Ver tabela e histórico
+completo em `docs/plan/PRINT-AGENT-REPO.md §0`.
 
-Ver tabela e histórico completo em `docs/plan/PRINT-AGENT-REPO.md §0`. O
-checklist manual do Tray foi inteiro validado em 2026-08-10 (incluindo
-múltiplas estações); continuam pendentes de validação manual só o que
-depende de impressora térmica real (`docs/testes-manuais.md` §2/§4) e o
-`.msi` numa VM Windows limpa (§5).
+**Diagnóstico (Fase 8):** tudo em `src/PrintAgent.Host/Diagnostics/`.
+`AgentPaths` centraliza os caminhos sob `%ProgramData%\DiskPrato\PrintAgent`;
+`AgentVersion` lê a versão do assembly (não repita `"1.0.0"` em lugar
+nenhum); `AgentLogging` configura o Serilog **em código** (o publish
+single-file quebra a descoberta de sinks por configuração);
+`StartupSelfTest` roda na subida do serviço e **nunca imprime**;
+`DiagnosticsExporter` monta o `.zip` de suporte e **nunca inclui o
+`device.dat`** — ele lista o que quer incluir, em vez de excluir o que não
+deve ir.
 
 **Backend em fase de teste:** o default de `AgentConfig.ApiBaseUrl` aponta
 para o túnel Cloudflare (`https://api.psiconaut4.com.br`), não para
@@ -85,10 +89,14 @@ SQLite (decisão revertida em 2026-08-08; ver plano §0 e §7.1 para o
 raciocínio). `JobStore` (`src/PrintAgent.Host/Storage/JobStore.cs`) é o único
 ponto de acesso a essa fila.
 
-**Named pipe** `\\.\pipe\diskprato-printagent` (`NamedPipeIpcServer`) já
-implementado desde a Fase 4, adiantado — o Tray (Fase 6) ainda não existe,
-mas o protocolo (`get-status`/`pair`/`unpair`/`set-printer`/`test-print`,
-JSON por linha) já está pronto pra ele consumir.
+**Named pipe** `\\.\pipe\diskprato-printagent` (`NamedPipeIpcServer`), JSON
+por linha, uma conexão por comando:
+`get-status`/`get-config`/`pair`/`unpair`/`set-printer`/`remove-printer`/`test-print`/`export-diagnostics`.
+A ACL do pipe permite `Users` porque o Tray roda sem elevação — por isso
+`export-diagnostics` grava o arquivo com `RunAsClient` (impersonando quem
+pediu) em vez de escrever como `LocalSystem`, que seria escrita arbitrária
+com privilégio de SYSTEM. Ao adicionar comando que escreva em caminho vindo
+do cliente, siga o mesmo padrão.
 
 ## Convenções deste repo
 
@@ -97,3 +105,4 @@ JSON por linha) já está pronto pra ele consumir.
 - Nunca somar/recalcular valores em centavos que vêm do backend (`unitPriceCents`, `subtotalCents`, `totalCents` etc.) — o agente formata, não calcula (plano §1, §5.4).
 - Hora do cupom sempre em `order.timezone` (IANA), nunca no fuso da máquina local (plano §5.4).
 - Ramificar tratamento de erro HTTP sempre por `ApiError.code`, nunca pelo texto de `message` (plano §6.6).
+- `installer/License.rtf` é **gerado**, não editado à mão: edite `installer/License.txt` e o build do `.wixproj` regenera e valida o RTF (`installer/build-license.ps1`). Editar o `.rtf` direto foi como a tela de termos do `.msi` ficou em branco por um release inteiro.

@@ -10,7 +10,7 @@ descreve como o agente o consome. Quando os dois divergirem, o OpenAPI vence.
 
 ---
 
-## 0. Status atual (atualizado em 2026-08-10)
+## 0. Status atual (atualizado em 2026-08-11)
 
 Progresso frente às fases descritas em §8. Cada commit corresponde a um
 bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
@@ -26,7 +26,8 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
 | 4 — Worker Service | `PrintAgent.Host` | ✅ feito (`feat(host)`) — fila local em arquivo desde o refactor de 2026-08-08 |
 | 6 — tray/setup | `PrintAgent.Tray` | ✅ feito (`feat(tray)`) — pendente validação manual (ver abaixo) |
 | 7 — instalador | WiX | ✅ feito (`feat(installer)`) — pendente validação em VM limpa |
-| 8 — endurecimento | Serilog, diagnóstico | ⏳ não iniciado |
+| 8 — endurecimento | Serilog, diagnóstico | ✅ feito (`feat(host)`) — pendente o aceite em hardware térmico real |
+| 10 — roteamento por estação | `Core`/`Host`/`Tray` | ✅ feito (3 fases, ver §10) |
 
 **O que foi decidido/ajustado em relação ao texto original do plano:**
 - A divisão real entre `Core` e `Printing` segue a árvore de `tests/` do
@@ -93,11 +94,11 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
   - `AgentStatusSnapshot` ganhou `PrinterStatus` (texto:
     `Ready`/`Offline`/`PaperOut`/`CoverOpen`/`Unknown`), lido via
     `IPrinterStatusQuery.QueryStatusAsync` com teto de 2s em
-    `AgentController.GetStatusAsync` — separado do `StatusReport` que o
-    `Worker` manda pro backend (esse continua com o TODO da Fase 8 em
-    aberto, §6 não mudou). É só o que faz o ícone da bandeja/tela de setup
-    mostrarem "impressora ok" de verdade, e nunca inventa "pronta" sem
-    saber (§5.3).
+    `AgentController.GetStatusAsync` — na época, separado do `StatusReport`
+    que o `Worker` manda pro backend, que ainda estava fixo em `unknown`. É o
+    que faz o ícone da bandeja/tela de setup mostrarem "impressora ok" de
+    verdade, e nunca inventa "pronta" sem saber (§5.3). Desde a Fase 8 os
+    dois leem a mesma consulta (`QueryDefaultPrinterStatusAsync`).
 
 **Pendências manuais (não automatizáveis por um agente):**
 - O teste de convivência do plano §8 Fase 2 exige uma fila de impressão
@@ -678,8 +679,82 @@ Cloudflare) enquanto o backend está em fase de teste. O default só vale
 para `agent.json` recém-criado; assim que o arquivo existe, o valor gravado
 nele manda.
 
-**Próximo passo:** Fase 8 (Serilog com rotação, exportar diagnóstico,
-auto-teste na inicialização).
+**Fase 8 (endurecimento) feita em 2026-08-11.** Os dois TODOs que estavam
+marcados no `Worker.cs` saíram, e entraram log em arquivo, auto-teste e
+exportação de diagnóstico. Decisões que valem registro:
+
+- **`agentVersion` vem do assembly** (`Diagnostics/AgentVersion.cs`), não
+  mais da constante `"1.0.0"` repetida em três lugares (`Worker`,
+  `NamedPipeIpcServer`, `Program`). A versão já morava no
+  `Directory.Build.props` e já virava a `ProductVersion` do `.msi`; o que
+  faltava era o agente se anunciar com ela. Sem isso, todo agente do parque
+  instalado continuaria dizendo 1.0.0 para sempre — e é por esse campo que o
+  backend decide quem precisa atualizar (`PRINT_AGENT_VERSION_UNSUPPORTED`,
+  §6.6). O `+<sha>` que o `InformationalVersion` carrega quando o build tem
+  SourceLink é cortado: o contrato espera semver simples.
+- **`StatusReport.printerState` agora é lido de verdade** (§5.3), não mais
+  fixo em `unknown`. `Offline`/`PaperOut`/`CoverOpen` colapsam em `error`:
+  nos três o cupom não sai até alguém ir até a impressora, e o detalhe fino
+  já vai no `errorCode` do ack do job. `warning` fica **sem uso de
+  propósito** — nenhum dos dois transportes detecta "ainda imprime, mas pede
+  atenção" (papel acabando não é lido nem pelo spooler nem pelo `DLE EOT`
+  que consultamos), e derivar um `warning` de `unknown` mostraria no
+  dashboard uma certeza que o agente não tem.
+- **Serilog configurado em código, não pelo `appsettings.json`.**
+  `Serilog.Settings.Configuration` descobre sinks varrendo o
+  `DependencyContext`, que é justamente o que o publish self-contained
+  single-file (§2) não expõe de forma confiável — o log sumiria só no
+  pacote que vai para a loja, o ambiente onde ninguém consegue depurar. O
+  único ajuste que faz sentido em campo (subir para `Debug` e reproduzir)
+  continua vindo do `appsettings.json`, por `Logging:LogLevel:Default`, com
+  nível irreconhecível caindo em `Information`: um valor escrito errado
+  nunca pode apagar o log inteiro na máquina que se está tentando
+  diagnosticar. Falha ao abrir o arquivo degrada para console e o serviço
+  sobe assim mesmo — um agente que não loga ainda imprime comandas.
+- **Auto-teste não imprime nada.** Confere pareamento, `apiBaseUrl`,
+  gravabilidade da fila e da pasta de log, e o estado de cada impressora
+  configurada; escreve o resultado no log como um bloco de uma linha por
+  check. Cupom de teste continua sendo só o botão do Tray, disparado por
+  gente: o serviço reinicia a cada boot e a cada recuperação de crash (o
+  instalador configura restart automático), e um cupom por reinício
+  desperdiçaria papel e confundiria o operador. Falha vira `Warning`, não
+  `Error` — nenhuma dessas condições impede o serviço de rodar, e um `Error`
+  na subida de toda instalação nova ensinaria o suporte a ignorar `Error`.
+- **Exportar diagnóstico grava impersonando o cliente do pipe.** A ACL do
+  pipe libera `BUILTIN\Users` (§7.4) e o serviço roda como `LocalSystem`: se
+  a gravação do `.zip` usasse a identidade do serviço, qualquer usuário
+  local mandaria uma linha de JSON no pipe e faria o SYSTEM escrever um
+  arquivo em qualquer lugar do disco, inclusive `%SystemRoot%\System32`.
+  Seria elevação de privilégio exposta pelo agente. O pacote é **montado**
+  como serviço (a pasta de dados é ACL-restrita e o usuário não a lê) e só a
+  escrita final passa por `NamedPipeServerStream.RunAsClient`, sob as
+  permissões de quem pediu. Por isso o `AgentIpcClient` do Tray conecta com
+  `TokenImpersonationLevel.Impersonation`.
+- **O pacote lista o que inclui, em vez de excluir o que não deve ir.** O
+  `device.dat` nunca entra: é o token, e um pacote de diagnóstico circula
+  por WhatsApp e e-mail. Uma lista de exclusão erraria por omissão no dia em
+  que alguém adicionasse o próximo arquivo sensível ao `%ProgramData%`. As
+  comandas **entram** (é o payload exato que explica um cupom torto), então
+  o `LEIA-ME.txt` dentro do zip avisa que ali há dados de clientes.
+
+**Também em 2026-08-11: a tela de termos de uso do `.msi` estava em
+branco** desde a Fase 7, e nada no build acusava. O `License.rtf` tinha os
+acentos escritos como `\'e` em vez de `\'e9` (escape cp1252 exige dois
+dígitos hex); o RichEdit que desenha aquela tela aborta em silêncio no
+primeiro escape malformado, então dos 4299 caracteres da licença só os 39 do
+título apareciam. Agora `License.txt` é a fonte editável, `License.rtf` é
+gerado por `installer/build-license.ps1` (mesma divisão de
+`resources/build-icon.ps1`), e o script **carrega o RTF gerado num RichEdit
+de verdade e compara com a origem** — build do instalador falha se a licença
+voltar a sair truncada. Os dois `.csproj` também ganharam
+`<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>`: o `.wixproj` chama
+`Publish` por fora da solution sem restaurar antes, e num clone limpo o
+`project.assets.json` sem alvo `win-x64` quebrava o empacotamento com
+NETSDK1047.
+
+**Próximo passo:** validação manual — o aceite da Fase 8 é em hardware
+térmico real (`docs/testes-manuais.md` §2/§4) e o do instalador é numa VM
+Windows limpa (§5). Nenhuma fase do plano continua em aberto no código.
 
 ---
 
@@ -1220,8 +1295,16 @@ WhatsApp e diagnosticar em 10 segundos.
 ### 7.4 IPC serviço ↔ tray
 
 Named pipe `\\.\pipe\diskprato-printagent`, JSON por linha. Comandos:
-`get-status`, `test-print`, `set-printer`, `pair`, `unpair`. ACL do pipe
-permite `Users` (a tela de setup roda sem elevação).
+`get-status`, `get-config`, `test-print`, `set-printer`, `remove-printer`,
+`pair`, `unpair`, `export-diagnostics`. ACL do pipe permite `Users` (a tela
+de setup roda sem elevação).
+
+Essa ACL é o motivo de `export-diagnostics` gravar o `.zip` impersonando o
+cliente (`RunAsClient`) em vez de escrever como `LocalSystem`: o comando
+recebe um caminho de destino do chamador, e sem impersonação qualquer
+usuário local faria o SYSTEM escrever onde quisesse. O cliente do Tray
+conecta com `TokenImpersonationLevel.Impersonation` justamente para isso
+funcionar.
 
 Serviço do Windows roda na Session 0 e não pode desenhar UI — por isso a
 separação. Tentar mostrar janela a partir do serviço não funciona no Windows
@@ -1321,8 +1404,17 @@ Serilog em arquivo com rotação (7 dias) em `%ProgramData%`, botão "exportar
 diagnóstico" (config + logs + últimos jobs, **sem o token**), auto-teste na
 inicialização.
 
+Implementado em 2026-08-11 (ver §0 para as decisões). Os arquivos ficam em
+`src/PrintAgent.Host/Diagnostics/`: `AgentPaths`, `AgentVersion`,
+`AgentLogging`, `StartupSelfTest`, `DiagnosticsExporter`. O log vai para
+`%ProgramData%\DiskPrato\PrintAgent\logs\printagent-YYYYMMDD.log` — pasta
+que herda a ACL restrita do diretório de dados (§7.2), e é por isso que o
+Tray não lê o log direto: quem monta o pacote de diagnóstico é o serviço.
+
 **Aceite:** hardware real (Elgin i9 ou Epson TM-T20). Corte de papel, fim de
 papel e impressora desligada produzem os `errorCode` certos no dashboard.
+Roteirizado em `docs/testes-manuais.md` §4 — **ainda não executado**, é o que
+falta para fechar a fase.
 
 ---
 
@@ -1346,9 +1438,10 @@ Compatibilidade, do lado do agente:
 
 ---
 
-## 10. Múltiplas impressoras (roteamento de comandas) — planejado
+## 10. Múltiplas impressoras (roteamento de comandas)
 
-**Planejado, não implementado.** Desenho completo do lado
+**Implementado — as três fases, entre 2026-08-10 e 2026-08-11** (ver a lista
+no fim desta seção e §0). Desenho completo do lado
 backend/dashboard (regra de roteamento por categoria/produto, campo
 `station` no dispositivo, contrato) está em
 `docs/planejamento-features/PRINT-AGENT.md` no repo do DiskPrato — esta
@@ -1452,10 +1545,11 @@ sem saber nada sobre categorias, produtos ou regras de roteamento.
    `Worker`. Sem UI nova no Tray, como planejado — configurável só via
    named pipe/suporte por enquanto (protocolo do pipe ficou
    deliberadamente igual ao de antes; ver §0).
-3. `SetupForm` com seção por estação. Só vale a pena depois que a Fase 2
-   do outro repo (UI de roteamento no dashboard) já validou que lojistas
-   reais usam a feature — não faz sentido redesenhar o Tray pra um cenário
-   que ninguém configurou ainda.
+3. ✅ **Feito em 2026-08-10.** `SetupForm` com seção por estação (N cards,
+   cada um com Salvar/Imprimir teste/Remover independentes), mais os
+   comandos `get-config` e `remove-printer` no pipe. Checklist manual
+   validado no mesmo dia, incluindo múltiplas estações
+   (`docs/testes-manuais.md` §3).
 
 ---
 
