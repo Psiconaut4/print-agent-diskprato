@@ -19,6 +19,25 @@
     <None Include="$(OpenApiSpec)" Link="v1.openapi.json" />
   </ItemGroup>
 
+  <!--
+    O glob padrao **/*.cs e expandido na AVALIACAO do projeto, antes de
+    qualquer target rodar. Em clone limpo o Contracts.g.cs ainda nao existe
+    nesse instante e ficava fora do Compile: a dll saia sem nenhum DTO (sem
+    erro nenhum aqui dentro) e todo o resto do repo quebrava com CS0246. O
+    segundo build passava, por isso so o CI via o problema. O arquivo sai do
+    glob e entra explicitamente no target abaixo, que roda depois do NSwag
+    (BeforeBuild) e antes do CoreCompile.
+  -->
+  <ItemGroup>
+    <Compile Remove="Generated\**" />
+  </ItemGroup>
+
+  <Target Name="IncludeGeneratedContracts" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <Compile Include="$(GeneratedContractsFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="NSwagGenerateContracts" BeforeTargets="BeforeBuild" Inputs="$(OpenApiSpec)" Outputs="$(GeneratedContractsFile)">
     <Exec Command="$(NSwagExe_Net90) openapi2csclient /input:$(OpenApiSpec) /namespace:PrintAgent.Contracts /output:$(GeneratedContractsFile) /GenerateClientClasses:false /GenerateClientInterfaces:false /GenerateDtoTypes:true /JsonLibrary:SystemTextJson /GenerateNullableReferenceTypes:true /GenerateDefaultValues:false /ClassStyle:Poco /RequiredPropertiesMustBeDefined:false /GenerateOptionalPropertiesAsNullable:true"
           EnvironmentVariables="DOTNET_ROLL_FORWARD=LatestMajor" />

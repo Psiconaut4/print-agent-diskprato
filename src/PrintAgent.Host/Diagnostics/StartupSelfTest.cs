@@ -100,6 +100,18 @@ public sealed class StartupSelfTest(AgentController controller, JobStore jobStor
             return new SelfTestCheck("Endereco da API", false, $"apiBaseUrl invalido no agent.json: \"{url}\".");
         }
 
+        // Os caminhos dos clientes sao root-relative e ja trazem o /api
+        // (/api/print-agents/v1/...), entao qualquer caminho aqui e descartado
+        // em silencio na resolucao da URI: quem escreve ".../api" no agent.json
+        // acha que apontou pro lugar certo e nao ve diferenca nenhuma.
+        if (uri.AbsolutePath != "/")
+        {
+            return new SelfTestCheck(
+                "Endereco da API",
+                false,
+                $"apiBaseUrl deve ser so a origem, sem caminho: \"{uri.AbsolutePath}\" sera ignorado. Use \"{uri.GetLeftPart(UriPartial.Authority)}\".");
+        }
+
         // http:// funciona e as vezes e o que o suporte usa pra testar contra um
         // backend local; so nao pode passar despercebido, porque o token do
         // dispositivo viaja em todo request (plano §7.2).

@@ -10,7 +10,15 @@
          de propósito — o operador do balcão não é necessariamente quem
          instalou. Um KeyPath em HKCU faria o atalho existir só para o
          instalador. -->
-    <SuppressIces>ICE43;ICE57</SuppressIces>
+    <!-- ICE61 reclama que a versão máxima removida não é menor que a atual —
+         que é exatamente o que AllowSameVersionUpgrades="yes" faz por
+         definição (Package.wxs). Suprimi-lo é a remediação documentada do
+         WiX para esse par. -->
+    <SuppressIces>ICE43;ICE57;ICE61</SuppressIces>
+    <!-- O Package declara Language="1046" (pt-BR); sem Cultures o bind sai
+         neutro e os diálogos do WixUI_Minimal apareceriam em inglês dentro de
+         um pacote declarado pt-BR. O WixToolset.UI.wixext já traz o .wxl. -->
+    <Cultures>pt-BR</Cultures>
     <!-- Fora da PrintAgent.slnx de propósito: o build do .msi publica os dois
          executáveis self-contained (~190 MB), o que tornaria `dotnet build`
          e `dotnet test` na raiz lentos demais para o loop de desenvolvimento.
@@ -44,6 +52,17 @@
        SkipAgentPublish=true: o release.yml publica os .exe por fora, assina
        cada um e só então empacota — republicar aqui sobrescreveria as
        assinaturas. -->
+  <!-- Host e Tray não são ProjectReference deste wixproj (são publicados pela
+       task MSBuild abaixo), então nada os restaura: em clone limpo o publish
+       morria com NETSDK1004 (project.assets.json não encontrado). Exec em vez
+       de <MSBuild Targets="Restore"> porque restore e publish na mesma
+       instância do MSBuild reaproveitam a avaliação anterior do projeto, e o
+       publish não enxergaria os assets recém-criados. -->
+  <Target Name="RestoreAgentBinaries" BeforeTargets="PublishAgentBinaries" Condition="'$(SkipAgentPublish)' != 'true'">
+    <Exec Command="dotnet restore &quot;$(MSBuildThisFileDirectory)..\src\PrintAgent.Host\PrintAgent.Host.csproj&quot;" />
+    <Exec Command="dotnet restore &quot;$(MSBuildThisFileDirectory)..\src\PrintAgent.Tray\PrintAgent.Tray.csproj&quot;" />
+  </Target>
+
   <Target Name="PublishAgentBinaries" BeforeTargets="BeforeBuild" Condition="'$(SkipAgentPublish)' != 'true'">
     <PropertyGroup>
       <_PublishProps>Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;IncludeNativeLibrariesForSelfExtract=true;DebugType=none</_PublishProps>

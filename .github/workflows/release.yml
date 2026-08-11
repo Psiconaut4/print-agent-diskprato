@@ -45,6 +45,21 @@ jobs:
           }
           "value=$v" >> $env:GITHUB_OUTPUT
 
+      # A versão só chega ao MSI pelo -p:Version= da linha de comando, então um
+      # Directory.Build.props defasado passava despercebido no release e o
+      # AgentVersion (que lê o assembly) mentia no diagnóstico e no .zip de
+      # suporte. Aqui as duas fontes têm de bater.
+      - name: Conferir a versão do Directory.Build.props
+        shell: pwsh
+        run: |
+          $props = [xml](Get-Content Directory.Build.props)
+          $declared = $props.Project.PropertyGroup.Version
+          $tag = '${{ steps.version.outputs.value }}'
+          if ($declared -ne $tag) {
+            throw "Directory.Build.props diz <Version>$declared</Version> mas a versão do release é $tag. Atualize o arquivo e refaça a tag."
+          }
+          Write-Host "Versão conferida: $tag"
+
       - name: Test
         run: dotnet test --configuration Release -p:Version=${{ steps.version.outputs.value }}
 
@@ -73,15 +88,28 @@ jobs:
           [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:SIGNING_CERT_PFX_BASE64))
           "pfx=$path" >> $env:GITHUB_OUTPUT
 
+      # Resolvido num passo só: se o glob não casar, $signtool.FullName vira
+      # $null e o erro sai opaco ("não é possível executar um comando vazio")
+      # em vez de dizer que falta o Windows SDK no runner.
+      - name: Localizar signtool
+        id: signtool
+        if: steps.cert.outputs.pfx != ''
+        shell: pwsh
+        run: |
+          $found = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $found) {
+            throw "signtool.exe nao encontrado em 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\'. O runner nao tem o Windows SDK instalado."
+          }
+          "path=$($found.FullName)" >> $env:GITHUB_OUTPUT
+
       - name: Assinar executáveis
         if: steps.cert.outputs.pfx != ''
         shell: pwsh
         env:
           SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
         run: |
-          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          & $signtool.FullName sign /f '${{ steps.cert.outputs.pfx }}' /p $env:SIGNING_CERT_PASSWORD `
+          & '${{ steps.signtool.outputs.path }}' sign /f '${{ steps.cert.outputs.pfx }}' /p $env:SIGNING_CERT_PASSWORD `
             /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
             installer/obj/stage/Release/host/PrintAgent.Host.exe `
             installer/obj/stage/Release/tray/PrintAgent.Tray.exe
@@ -98,29 +126,33 @@ jobs:
         env:
           SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
         run: |
-          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          & $signtool.FullName sign /f '${{ steps.cert.outputs.pfx }}' /p $env:SIGNING_CERT_PASSWORD `
+          & '${{ steps.signtool.outputs.path }}' sign /f '${{ steps.cert.outputs.pfx }}' /p $env:SIGNING_CERT_PASSWORD `
             /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
             installer/bin/Release/DiskPratoPrintAgent.msi
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      - name: Renomear com a versão
+      # Dois assets de propósito: o versionado dá rastreabilidade ("qual .msi
+      # está naquele balcão?"), e a cópia de nome fixo é o que faz a URL
+      # .../releases/latest/download/DiskPratoPrintAgent.msi funcionar — o nome
+      # do arquivo entra nessa URL, então ele não pode carregar a versão.
+      - name: Preparar os assets
         id: artifact
         shell: pwsh
         run: |
-          $name = 'DiskPratoPrintAgent-${{ steps.version.outputs.value }}.msi'
-          Move-Item installer/bin/Release/DiskPratoPrintAgent.msi "installer/bin/Release/$name"
-          "path=installer/bin/Release/$name" >> $env:GITHUB_OUTPUT
+          $versioned = 'installer/bin/Release/DiskPratoPrintAgent-${{ steps.version.outputs.value }}.msi'
+          Copy-Item installer/bin/Release/DiskPratoPrintAgent.msi $versioned
+          "versioned=$versioned" >> $env:GITHUB_OUTPUT
 
       - uses: actions/upload-artifact@v4
         with:
           name: msi
-          path: ${{ steps.artifact.outputs.path }}
+          path: ${{ steps.artifact.outputs.versioned }}
 
       - name: GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.artifact.outputs.path }}
+          files: |
+            ${{ steps.artifact.outputs.versioned }}
+            installer/bin/Release/DiskPratoPrintAgent.msi
           generate_release_notes: true

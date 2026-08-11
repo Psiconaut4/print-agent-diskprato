@@ -1,7 +1,11 @@
 name: CI
 
+# Sem filtro de branch, o push de uma tag disparava CI e Release ao mesmo
+# tempo — dois publishes self-contained de ~190 MB concorrendo. Tag é assunto
+# do release.yml.
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -34,6 +38,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      # O wixproj restaura Host e Tray por conta própria (RestoreAgentBinaries),
+      # mas restaurar a .slnx aqui deixa o cache de pacotes quente e cobre o
+      # caso de alguém rodar o job com SkipAgentPublish.
+      - name: Restore
+        run: dotnet restore
 
       - name: Build .msi
         run: dotnet build installer/PrintAgent.Installer.wixproj --configuration Release

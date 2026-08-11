@@ -78,9 +78,12 @@ single-file quebra a descoberta de sinks por configuração);
 deve ir.
 
 **Backend em fase de teste:** o default de `AgentConfig.ApiBaseUrl` aponta
-para o túnel Cloudflare (`https://api.psiconaut4.com.br`), não para
+para o túnel Cloudflare (`https://app.psiconaut4.com.br`), não para
 `api.diskprato.com`. O default só vale para `agent.json` recém-criado —
-depois disso o valor no arquivo manda.
+depois disso o valor no arquivo manda. O `ApiBaseUrl` é **só a origem, sem
+caminho**: o prefixo `/api` já está nos caminhos dos clientes
+(`/api/print-agents/v1/...`), que são root-relative, então um caminho posto
+ali é descartado em silêncio na resolução da URI — `StartupSelfTest` avisa.
 
 **Fila local:** arquivo, não banco. `%ProgramData%\DiskPrato\PrintAgent\queue\`
 com `pending/`, `printed/`, `failed/` — um `.json` por job, escrita atômica
@@ -106,3 +109,5 @@ do cliente, siga o mesmo padrão.
 - Hora do cupom sempre em `order.timezone` (IANA), nunca no fuso da máquina local (plano §5.4).
 - Ramificar tratamento de erro HTTP sempre por `ApiError.code`, nunca pelo texto de `message` (plano §6.6).
 - `installer/License.rtf` é **gerado**, não editado à mão: edite `installer/License.txt` e o build do `.wixproj` regenera e valida o RTF (`installer/build-license.ps1`). Editar o `.rtf` direto foi como a tela de termos do `.msi` ficou em branco por um release inteiro.
+- Arquivo gerado durante o build **nunca** pode depender do glob padrão `**/*.cs` para ser compilado: o glob é expandido na *avaliação* do projeto, antes de qualquer target rodar, então em clone limpo o arquivo ainda não existe e some da compilação sem erro nenhum. Inclua explicitamente no `Compile` a partir de um target (ver `IncludeGeneratedContracts` em `PrintAgent.Contracts.csproj`). Foi assim que o CI ficou vermelho enquanto todo build local passava.
+- Antes de mexer em build/instalador, valide em **worktree limpo** (`git worktree add`), não no diretório de trabalho: `obj/`, `bin/` e `Generated/` mascaram exatamente a classe de bug que só o CI vê.

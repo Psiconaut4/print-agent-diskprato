@@ -29,6 +29,42 @@ bloco fechado; `dotnet build`/`dotnet test` na raiz do repo passam limpos
 | 8 — endurecimento | Serilog, diagnóstico | ✅ feito (`feat(host)`) — pendente o aceite em hardware térmico real |
 | 10 — roteamento por estação | `Core`/`Host`/`Tray` | ✅ feito (3 fases, ver §10) |
 
+**Correção do CI e do release em 2026-08-11.** Os dois jobs do `ci.yml` e o
+`release.yml` (tag `v1.0.1`) estavam vermelhos por **dois bugs de primeiro
+build em clone limpo**, invisíveis localmente porque `obj/`, `bin/` e
+`Generated/` já existiam na máquina de desenvolvimento:
+
+1. `Generated/Contracts.g.cs` dependia do glob padrão `**/*.cs` para entrar
+   na compilação, mas o glob é expandido na **avaliação** do projeto, antes
+   de o target do NSwag rodar. Em clone limpo o arquivo não existia nesse
+   instante: `PrintAgent.Contracts.dll` saía sem nenhum DTO (sem erro algum
+   dentro dela) e o repo inteiro quebrava com 13× `CS0246`. O segundo build
+   passaria — daí só o CI ver. Corrigido com `<Compile Remove="Generated\**" />`
+   mais o target `IncludeGeneratedContracts` (`BeforeTargets="CoreCompile"`).
+2. `PublishAgentBinaries` no `.wixproj` publicava Host e Tray via task
+   `MSBuild`, mas nada os restaurava (não são `ProjectReference`): sem
+   `project.assets.json`, `NETSDK1004`. Corrigido com o target
+   `RestoreAgentBinaries`, que usa `Exec`/`dotnet restore` — restore e
+   publish na mesma instância do MSBuild reaproveitam a avaliação anterior
+   e o publish não enxergaria os assets novos.
+
+Junto vieram: `global.json` fixando o SDK (o runner usava 10.0.400 e a
+máquina local 10.0.302, e `TreatWarningsAsErrors` torna isso uma
+bomba-relógio); `on: push` do `ci.yml` restrito a `main` (o push de tag
+disparava CI e Release ao mesmo tempo, dois publishes de ~190 MB
+concorrendo); guarda no `release.yml` conferindo que o `Directory.Build.props`
+bate com a tag (estavam dessincronizados: `1.0.0` vs `v1.0.1`); `signtool`
+resolvido num passo só, com erro legível quando o SDK falta no runner;
+`AllowSameVersionUpgrades="yes"` no `MajorUpgrade` (com `ICE61` suprimido,
+que é a remediação documentada do WiX para esse par); e `<Cultures>pt-BR</Cultures>`
+no `.wixproj`, já que o `Package` declarava `Language="1046"` mas o bind
+saía neutro e os diálogos do WixUI apareciam em inglês.
+
+Distribuição: o `release.yml` passou a anexar **dois** assets — o versionado
+(`DiskPratoPrintAgent-x.y.z.msi`, rastreabilidade) e uma cópia de nome fixo
+(`DiskPratoPrintAgent.msi`), que é o que faz valer o link permanente
+`.../releases/latest/download/DiskPratoPrintAgent.msi` (exige repo público).
+
 **O que foi decidido/ajustado em relação ao texto original do plano:**
 - A divisão real entre `Core` e `Printing` segue a árvore de `tests/` do
   §3 (que já estava certa), não a frase solta de `PrintAgent.Core/` em §3
@@ -674,10 +710,18 @@ Ainda não validado: instalação/desinstalação numa VM Windows limpa
 `docs/testes-manuais.md` §5.
 
 **Também em 2026-08-10:** o default de `AgentConfig.ApiBaseUrl` passou de
-`https://api.diskprato.com` para `https://api.psiconaut4.com.br` (túnel
-Cloudflare) enquanto o backend está em fase de teste. O default só vale
-para `agent.json` recém-criado; assim que o arquivo existe, o valor gravado
-nele manda.
+`https://api.diskprato.com` para o túnel Cloudflare enquanto o backend está
+em fase de teste. O default só vale para `agent.json` recém-criado; assim
+que o arquivo existe, o valor gravado nele manda. **Em 2026-08-11 o túnel
+virou `https://app.psiconaut4.com.br`** (era `api.psiconaut4.com.br`).
+
+Nada mudou na montagem das URLs: os cinco caminhos da API
+(`SseStreamClient.StreamPath`, `PairingApiClient.PairPath`, e os três do
+`JobsApiClient`) são root-relative e **já carregam o prefixo `/api`** —
+`/api/print-agents/v1/...`. Por isso o `ApiBaseUrl` é só a origem. O reverso
+disso é uma armadilha: caminho posto no `ApiBaseUrl` é descartado em
+silêncio na resolução da URI, então `StartupSelfTest.CheckApiBaseUrl()`
+passou a reprovar `apiBaseUrl` com `AbsolutePath` diferente de `/`.
 
 **Fase 8 (endurecimento) feita em 2026-08-11.** Os dois TODOs que estavam
 marcados no `Worker.cs` saíram, e entraram log em arquivo, auto-teste e
