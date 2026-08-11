@@ -28,7 +28,8 @@ public sealed class JobStore
 
     public JobStore(string? queueDirectory = null)
     {
-        var root = queueDirectory ?? Path.Combine(Config.AgentConfigStore.DefaultDirectory, "queue");
+        var root = queueDirectory ?? Diagnostics.AgentPaths.QueueDirectory;
+        RootDirectory = root;
         _pendingDir = Path.Combine(root, "pending");
         _printedDir = Path.Combine(root, "printed");
         _failedDir = Path.Combine(root, "failed");
@@ -37,6 +38,13 @@ public sealed class JobStore
         Directory.CreateDirectory(_printedDir);
         Directory.CreateDirectory(_failedDir);
     }
+
+    /// <summary>
+    /// Raiz da fila (<c>queue/</c>). Exposta para o auto-teste da inicialização
+    /// e o pacote de diagnóstico (plano §8, Fase 8), que precisam falar da
+    /// pasta em si — nenhum dos dois lê ou escreve job por fora daqui.
+    /// </summary>
+    public string RootDirectory { get; }
 
     /// <summary>
     /// Já chegou a um estado terminal (impresso ou falhou em definitivo). O

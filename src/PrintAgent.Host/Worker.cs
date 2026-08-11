@@ -1,5 +1,6 @@
 using PrintAgent.Contracts;
 using PrintAgent.Core;
+using PrintAgent.Host.Diagnostics;
 using PrintAgent.Host.Storage;
 using PrintAgent.Printing;
 using PrintAgent.Transport;
@@ -18,6 +19,7 @@ public sealed class Worker(
     AgentController controller,
     JobStore jobStore,
     PrintOrchestrator orchestrator,
+    StartupSelfTest selfTest,
     ILogger<Worker> logger,
     ILoggerFactory loggerFactory) : BackgroundService
 {
@@ -25,11 +27,13 @@ public sealed class Worker(
     private static readonly TimeSpan LocalRetryInterval = TimeSpan.FromSeconds(15);
     private const int StatusReportEveryNTicks = 20; // ~5 min com LocalRetryInterval=15s (plano §6: no maximo a cada 5 min)
 
-    private const string AgentVersion = "1.0.0"; // TODO(Fase 8): ler da versao do assembly/instalador.
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         jobStore.CleanupOldPrinted(DateTimeOffset.UtcNow.AddDays(-7));
+
+        await RunSafelyAsync(
+            async () => StartupSelfTest.Log(logger, await selfTest.RunAsync(stoppingToken).ConfigureAwait(false)),
+            "auto-teste da inicializacao").ConfigureAwait(false);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -67,8 +71,8 @@ public sealed class Worker(
     private async Task RunPairedAsync(CancellationToken stoppingToken)
     {
         var apiBaseUrl = new Uri(controller.Config.ApiBaseUrl);
-        using var apiHttp = PrintAgentHttpClientFactory.CreateApiClient(apiBaseUrl, () => controller.Token, AgentVersion);
-        using var streamHttp = PrintAgentHttpClientFactory.CreateStreamClient(apiBaseUrl, () => controller.Token, AgentVersion);
+        using var apiHttp = PrintAgentHttpClientFactory.CreateApiClient(apiBaseUrl, () => controller.Token, AgentVersion.Current);
+        using var streamHttp = PrintAgentHttpClientFactory.CreateStreamClient(apiBaseUrl, () => controller.Token, AgentVersion.Current);
 
         var jobsApi = new JobsApiClient(apiHttp);
         var ackFlusher = new AckFlusher(jobStore, jobsApi, loggerFactory.CreateLogger<AckFlusher>());
@@ -196,21 +200,41 @@ public sealed class Worker(
         }
     }
 
-    private Task ReportStatusAsync(JobsApiClient jobsApi, CancellationToken ct)
+    /// <summary>
+    /// Traduz a leitura física da impressora (plano §5.3) para o vocabulário do
+    /// contrato. <c>Warning</c> fica sem uso de propósito: nenhum dos dois
+    /// transportes sabe detectar uma condição do tipo "ainda imprime, mas pede
+    /// atenção" (papel acabando não é lido nem pelo spooler nem pelo ESC/POS
+    /// que consultamos), e inventar um <c>warning</c> a partir de
+    /// <c>Unknown</c> mostraria no dashboard uma certeza que o agente não tem.
+    /// </summary>
+    public static Contracts.StatusReportPrinterState ToReportState(PrinterStatus status) => status switch
+    {
+        PrinterStatus.Ready => Contracts.StatusReportPrinterState.Ready,
+        // Offline/sem papel/tampa aberta: nos tres o cupom nao sai ate alguem
+        // ir ate a impressora — do ponto de vista do dashboard e a mesma
+        // urgencia, e o detalhe fino vai no errorCode do ack do job.
+        PrinterStatus.Offline or PrinterStatus.PaperOut or PrinterStatus.CoverOpen => Contracts.StatusReportPrinterState.Error,
+        _ => Contracts.StatusReportPrinterState.Unknown,
+    };
+
+    private async Task ReportStatusAsync(JobsApiClient jobsApi, CancellationToken ct)
     {
         var printer = controller.ResolveDefaultPrinter();
+        var printerStatus = await controller.QueryDefaultPrinterStatusAsync(ct).ConfigureAwait(false);
+
         var report = new Contracts.StatusReport
         {
-            PrinterState = Contracts.StatusReportPrinterState.Unknown, // TODO(Fase 8): ligar a QueryStatusAsync dos transportes.
+            PrinterState = ToReportState(printerStatus),
             Transport = printer.Transport == Config.PrinterTransportKind.Spooler
                 ? Contracts.StatusReportTransport.Spooler
                 : Contracts.StatusReportTransport.Network,
             PrinterName = printer.Transport == Config.PrinterTransportKind.Spooler ? printer.SpoolerName : printer.Host,
             QueuedJobs = jobStore.GetQueueLength(),
-            AgentVersion = AgentVersion,
+            AgentVersion = AgentVersion.Current,
         };
 
-        return jobsApi.ReportStatusAsync(report, ct); // best-effort: nunca lança.
+        await jobsApi.ReportStatusAsync(report, ct).ConfigureAwait(false); // best-effort: nunca lança.
     }
 
     private async Task RunSafelyAsync(Func<Task> action, string what)

@@ -3,6 +3,8 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- Ver a nota equivalente em PrintAgent.Host.csproj. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>..\..\resources\icon-16-256.ico</ApplicationIcon>
     <AssemblyTitle>DiskPrato Print Agent</AssemblyTitle>

@@ -6,6 +6,7 @@ using System.Text.Json;
 using PrintAgent.Contracts;
 using PrintAgent.Core;
 using PrintAgent.Host.Config;
+using PrintAgent.Host.Diagnostics;
 using PrintAgent.Printing;
 using PrintAgent.Transport;
 
@@ -22,10 +23,12 @@ namespace PrintAgent.Host.Ipc;
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class NamedPipeIpcServer(
-    AgentController controller, EscPosFormatter formatter, ILogger<NamedPipeIpcServer> logger) : BackgroundService
+    AgentController controller,
+    EscPosFormatter formatter,
+    DiagnosticsExporter diagnosticsExporter,
+    ILogger<NamedPipeIpcServer> logger) : BackgroundService
 {
     public const string PipeName = "diskprato-printagent";
-    private const string AgentVersion = "1.0.0";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -78,11 +81,11 @@ public sealed class NamedPipeIpcServer(
             return;
         }
 
-        var response = await DispatchAsync(line, ct).ConfigureAwait(false);
+        var response = await DispatchAsync(server, line, ct).ConfigureAwait(false);
         await writer.WriteLineAsync(JsonSerializer.Serialize(response)).ConfigureAwait(false);
     }
 
-    private async Task<IpcResponse> DispatchAsync(string line, CancellationToken ct)
+    private async Task<IpcResponse> DispatchAsync(NamedPipeServerStream server, string line, CancellationToken ct)
     {
         IpcRequest? request;
         try
@@ -110,6 +113,7 @@ public sealed class NamedPipeIpcServer(
                 "set-printer" => await HandleSetPrinterAsync(request, ct).ConfigureAwait(false),
                 "remove-printer" => await HandleRemovePrinterAsync(request, ct).ConfigureAwait(false),
                 "test-print" => await HandleTestPrintAsync(request, ct).ConfigureAwait(false),
+                "export-diagnostics" => await HandleExportDiagnosticsAsync(server, request, ct).ConfigureAwait(false),
                 _ => IpcResponse.Failure($"Comando desconhecido: {request.Command}"),
             };
         }
@@ -128,7 +132,7 @@ public sealed class NamedPipeIpcServer(
         }
 
         var outcome = await controller.PairAsync(
-            request.Code, request.DeviceName, AgentVersion, "win-x64 / Windows", ct).ConfigureAwait(false);
+            request.Code, request.DeviceName, AgentVersion.Current, "win-x64 / Windows", ct).ConfigureAwait(false);
 
         return outcome switch
         {
@@ -176,6 +180,59 @@ public sealed class NamedPipeIpcServer(
         return result.Success
             ? IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false))
             : IpcResponse.Failure(result.Detail ?? result.ErrorCode?.ToString() ?? "Falha desconhecida na impressao de teste.");
+    }
+
+    /// <summary>
+    /// Grava o pacote de diagnóstico (plano §8, Fase 8) onde o cliente pediu —
+    /// mas escrevendo com o token do cliente, não com o do serviço.
+    ///
+    /// A ACL do pipe libera <c>BUILTIN\Users</c> para o Tray funcionar sem
+    /// elevação, e o serviço roda como <c>LocalSystem</c>. Se o
+    /// <c>File.WriteAllBytes</c> rodasse com a identidade do serviço, qualquer
+    /// usuário local mandaria uma linha de JSON neste pipe e faria o SYSTEM
+    /// gravar um arquivo em qualquer lugar do disco — inclusive
+    /// <c>%SystemRoot%\System32</c>. Seria elevação de privilégio de verdade,
+    /// exposta pelo agente. <see cref="NamedPipeServerStream.RunAsClient"/>
+    /// impersona quem está do outro lado do pipe, então a gravação passa pelas
+    /// permissões do próprio usuário: ele só consegue escrever onde já podia.
+    ///
+    /// O zip é montado antes, como serviço (a pasta de dados é ACL-restrita e
+    /// o usuário não a lê), e só a escrita final é impersonada.
+    /// </summary>
+    private async Task<IpcResponse> HandleExportDiagnosticsAsync(
+        NamedPipeServerStream server, IpcRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.DestinationPath))
+        {
+            return IpcResponse.Failure("export-diagnostics exige destinationPath.");
+        }
+
+        var destination = request.DestinationPath;
+        var bytes = await diagnosticsExporter.BuildAsync(ct).ConfigureAwait(false);
+
+        Exception? writeFailure = null;
+        server.RunAsClient(() =>
+        {
+            try
+            {
+                File.WriteAllBytes(destination, bytes);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                writeFailure = ex;
+            }
+        });
+
+        if (writeFailure is not null)
+        {
+            logger.LogError(writeFailure, "Falha ao gravar o pacote de diagnostico em {Destination}.", destination);
+            return IpcResponse.Failure($"Nao foi possivel gravar em {destination}: {writeFailure.Message}");
+        }
+
+        logger.LogInformation("Pacote de diagnostico exportado para {Destination} ({Bytes} bytes).", destination, bytes.Length);
+        var response = IpcResponse.Success(await controller.GetStatusAsync(ct).ConfigureAwait(false));
+        response.Path = destination;
+        return response;
     }
 
     private static PrintJob BuildSyntheticJob() => new()

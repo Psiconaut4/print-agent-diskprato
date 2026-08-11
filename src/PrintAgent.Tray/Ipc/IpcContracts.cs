@@ -68,6 +68,9 @@ public sealed class IpcRequestDto
 
     /// <summary>remove-printer: estação a remover. test-print: estação a testar (null = impressora "padrão").</summary>
     public StationDto? Station { get; set; }
+
+    /// <summary>export-diagnostics: onde o serviço deve gravar o .zip.</summary>
+    public string? DestinationPath { get; set; }
 }
 
 /// <summary>Espelha <c>PrintAgent.Host.Ipc.IpcResponse</c>.</summary>
@@ -79,4 +82,7 @@ public sealed class IpcResponseDto
 
     /// <summary>Só preenchido em resposta a <c>get-config</c> — uma entrada por estação configurada (plano §10).</summary>
     public List<PrinterConfigDto>? Printers { get; set; }
+
+    /// <summary>Só preenchido em resposta a <c>export-diagnostics</c>: onde o .zip foi gravado.</summary>
+    public string? Path { get; set; }
 }

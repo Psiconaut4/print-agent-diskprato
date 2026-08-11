@@ -22,6 +22,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add("Configurar...", null, (_, _) => ShowSetup());
         menu.Items.Add("Imprimir teste", null, async (_, _) => await RunTestPrintAsync());
+        menu.Items.Add("Exportar diagnóstico...", null, async (_, _) => await RunExportDiagnosticsAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Sair", null, (_, _) => ExitApp());
 
@@ -63,6 +64,19 @@ public sealed class TrayApplicationContext : ApplicationContext
             result.Ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
         await RefreshStatusAsync();
     }
+
+    /// <summary>
+    /// Sem janela dona: o menu da bandeja não tem uma, e passar a tela de setup
+    /// como owner (quando ela existe) faria o diálogo de salvar sumir junto se
+    /// o lojista fechasse a tela no meio.
+    /// </summary>
+    private async Task RunExportDiagnosticsAsync() =>
+        await DiagnosticsExportAction.RunAsync(null, _ipc, (message, ok) =>
+            _icon.ShowBalloonTip(
+                4000,
+                "Gerente de Impressão DiskPrato",
+                message,
+                ok ? ToolTipIcon.Info : ToolTipIcon.Warning));
 
     private async Task RefreshStatusAsync()
     {

@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Security.Principal;
 using System.Text.Json;
 
 namespace PrintAgent.Tray.Ipc;
@@ -36,11 +37,26 @@ public sealed class AgentIpcClient
     public Task<IpcResponseDto> TestPrintAsync(StationDto? station = null, CancellationToken ct = default) =>
         SendAsync(new IpcRequestDto { Command = "test-print", Station = station }, ct);
 
+    /// <summary>
+    /// Pede ao serviço o pacote de diagnóstico (plano §8, Fase 8). Quem monta e
+    /// grava é o serviço: os arquivos moram em <c>%ProgramData%</c>, cuja ACL o
+    /// instalador restringe a SYSTEM + Administradores, e este processo roda
+    /// como o operador do balcão — ele não consegue nem listar aquela pasta. A
+    /// gravação em <paramref name="destinationPath"/> é feita pelo serviço
+    /// impersonando este processo, então vale a permissão do usuário.
+    /// </summary>
+    public Task<IpcResponseDto> ExportDiagnosticsAsync(string destinationPath, CancellationToken ct = default) =>
+        SendAsync(new IpcRequestDto { Command = "export-diagnostics", DestinationPath = destinationPath }, ct);
+
     private static async Task<IpcResponseDto> SendAsync(IpcRequestDto request, CancellationToken ct)
     {
         try
         {
-            using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            // TokenImpersonationLevel.Impersonation: sem isso o RunAsClient do
+            // lado do serviço falha, e é dele que depende o export-diagnostics
+            // gravar com a identidade do usuário em vez da do LocalSystem.
+            using var pipe = new NamedPipeClientStream(
+                ".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
             await pipe.ConnectAsync(ConnectTimeoutMs, ct).ConfigureAwait(false);
 
             using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };

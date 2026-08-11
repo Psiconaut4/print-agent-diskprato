@@ -2,6 +2,12 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- O instalador publica este projeto self-contained win-x64 chamando o
+         target Publish por fora da solução (installer/PrintAgent.Installer.wixproj),
+         sem restaurar antes. Sem o RID declarado aqui, o restore normal gera um
+         project.assets.json sem alvo win-x64 e o empacotamento quebra em
+         NETSDK1047 num clone limpo. Não muda a saída do build padrão. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <UserSecretsId>dotnet-PrintAgent.Host-572eb9c7-5776-451b-bb51-baba282eb744</UserSecretsId>
     <ApplicationIcon>..\..\resources\icon-16-256.ico</ApplicationIcon>
     <AssemblyTitle>DiskPrato Print Agent Service</AssemblyTitle>
@@ -18,6 +24,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.10" />
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.10" />
   </ItemGroup>
 

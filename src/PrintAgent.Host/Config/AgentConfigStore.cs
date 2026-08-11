@@ -23,10 +23,7 @@ public sealed class AgentConfigStore
     }
 
     /// <summary><c>%ProgramData%\DiskPrato\PrintAgent</c> (plano §7).</summary>
-    public static string DefaultDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "DiskPrato",
-        "PrintAgent");
+    public static string DefaultDirectory => Diagnostics.AgentPaths.RootDirectory;
 
     public string ConfigPath => _path;
 

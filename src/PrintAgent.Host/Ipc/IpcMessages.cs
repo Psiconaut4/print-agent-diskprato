@@ -6,7 +6,8 @@ namespace PrintAgent.Host.Ipc;
 /// Requisição JSON (uma linha por mensagem) do named pipe
 /// <c>\\.\pipe\diskprato-printagent</c> (plano §7.4). <see cref="Command"/>:
 /// <c>get-status</c>, <c>get-config</c>, <c>test-print</c>, <c>set-printer</c>,
-/// <c>remove-printer</c>, <c>pair</c>, <c>unpair</c>.
+/// <c>remove-printer</c>, <c>pair</c>, <c>unpair</c>,
+/// <c>export-diagnostics</c>.
 /// </summary>
 public sealed class IpcRequest
 {
@@ -26,6 +27,13 @@ public sealed class IpcRequest
     /// estação existir no protocolo.
     /// </summary>
     public PrintJobTarget? Station { get; set; }
+
+    /// <summary>
+    /// <c>export-diagnostics</c>: onde gravar o <c>.zip</c>. O caminho é do
+    /// cliente, e o serviço grava impersonando-o — ver
+    /// <c>NamedPipeIpcServer.HandleExportDiagnosticsAsync</c>.
+    /// </summary>
+    public string? DestinationPath { get; set; }
 }
 
 public sealed class IpcResponse
@@ -40,6 +48,9 @@ public sealed class IpcResponse
     /// estação configurada, não só a impressora "padrão".
     /// </summary>
     public IReadOnlyList<Config.PrinterConfig>? Printers { get; set; }
+
+    /// <summary>Só preenchido em resposta a <c>export-diagnostics</c>: onde o <c>.zip</c> foi efetivamente gravado.</summary>
+    public string? Path { get; set; }
 
     public static IpcResponse Success(AgentStatusSnapshot? status = null, IReadOnlyList<Config.PrinterConfig>? printers = null) =>
         new() { Ok = true, Status = status, Printers = printers };

@@ -24,6 +24,8 @@ public sealed class SetupForm : Form
     private readonly FlowLayoutPanel _printersContainer;
     private readonly List<PrinterSectionView> _printerSections = new();
 
+    private readonly Button _exportDiagnosticsButton;
+
     private readonly RichTextBox _activityList;
     private readonly List<(string Text, Color Color)> _activityEntries = new();
     private const int MaxActivityEntries = 50;
@@ -183,6 +185,21 @@ public sealed class SetupForm : Form
             TabStop = false,
         };
         root.Controls.Add(Section("Atividade recente", [_activityList]));
+
+        _exportDiagnosticsButton = new Button { Text = "Exportar diagnóstico...", AutoSize = true };
+        _exportDiagnosticsButton.Click += async (_, _) => await OnExportDiagnosticsAsync();
+
+        root.Controls.Add(Section("Suporte", [
+            new Label
+            {
+                AutoSize = true,
+                MaximumSize = new Size(400, 0),
+                Text = "Gera um arquivo .zip com a configuração, os registros de funcionamento "
+                    + "e as últimas comandas, para enviar ao suporte do DiskPrato. "
+                    + "O código de pareamento deste dispositivo não é incluído.",
+            },
+            ButtonRow(_exportDiagnosticsButton),
+        ]));
 
         Load += async (_, _) => await OnLoadAsync();
     }
@@ -548,6 +565,19 @@ public sealed class SetupForm : Form
         if (_printerSections.Count == 0)
         {
             AddPrinterSection(initial: null);
+        }
+    }
+
+    private async Task OnExportDiagnosticsAsync()
+    {
+        _exportDiagnosticsButton.Enabled = false;
+        try
+        {
+            await DiagnosticsExportAction.RunAsync(this, _ipc, (message, ok) => LogActivity(message, ok));
+        }
+        finally
+        {
+            _exportDiagnosticsButton.Enabled = true;
         }
     }
 

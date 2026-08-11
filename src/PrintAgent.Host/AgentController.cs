@@ -157,10 +157,8 @@ public sealed class AgentController
 
     /// <summary>
     /// Inclui uma leitura best-effort do estado físico da impressora (plano
-    /// §5.3), separada do <c>StatusReport</c> que o <c>Worker</c> manda pro
-    /// backend (esse ainda não liga a <see cref="IPrinterStatusQuery"/>,
-    /// TODO da Fase 8) — aqui é só para o ícone da bandeja/tela de setup, com
-    /// um teto curto pra nunca travar o pipe numa impressora que não responde.
+    /// §5.3) — o ícone da bandeja e a tela de setup vivem disso, com um teto
+    /// curto pra nunca travar o pipe numa impressora que não responde.
     /// </summary>
     public async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken ct)
     {
@@ -174,7 +172,15 @@ public sealed class AgentController
             (await QueryPrinterStatusAsync(printer, ct).ConfigureAwait(false)).ToString());
     }
 
-    private static async Task<PrinterStatus> QueryPrinterStatusAsync(PrinterConfig printer, CancellationToken ct)
+    /// <summary>
+    /// Mesma leitura que alimenta o ícone da bandeja, para quem precisa do
+    /// enum e não do retrato inteiro — o <c>StatusReport</c> periódico do
+    /// <see cref="Worker"/> (plano §6) e o auto-teste da inicialização.
+    /// </summary>
+    public Task<PrinterStatus> QueryDefaultPrinterStatusAsync(CancellationToken ct) =>
+        QueryPrinterStatusAsync(ResolveDefaultPrinter(), ct);
+
+    public static async Task<PrinterStatus> QueryPrinterStatusAsync(PrinterConfig printer, CancellationToken ct)
     {
         try
         {
