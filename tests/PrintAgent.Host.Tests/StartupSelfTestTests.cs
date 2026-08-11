@@ -74,6 +74,29 @@ public class StartupSelfTestTests : IDisposable
     }
 
     [Fact]
+    public async Task Flags_an_api_base_url_that_carries_a_path()
+    {
+        // Os caminhos dos clientes sao root-relative e ja trazem o /api, entao
+        // um caminho aqui e descartado em silencio: sem esse aviso, quem
+        // escreve ".../api" no agent.json nao ve diferenca nenhuma.
+        _configStore.Save(new AgentConfig { ApiBaseUrl = "https://app.exemplo.invalid/api" });
+        var controller = new AgentController(
+            _configStore,
+            new DeviceTokenStore(Path.Combine(_rootDir, "device.dat")),
+            new PairingApiClient(new HttpClient { BaseAddress = new Uri("https://example.invalid") }),
+            new JobStore(Path.Combine(_rootDir, "queue")));
+
+        var checks = await new StartupSelfTest(controller, new JobStore(Path.Combine(_rootDir, "queue")))
+        {
+            LogsDirectory = Path.Combine(_rootDir, "logs"),
+        }.RunAsync(CancellationToken.None);
+
+        var check = Find(checks, "Endereco da API");
+        Assert.False(check.Ok);
+        Assert.Contains("https://app.exemplo.invalid", check.Detail);
+    }
+
+    [Fact]
     public async Task Reports_a_printer_without_queue_or_host_as_a_failure()
     {
         _controller.UpdatePrinterConfig(new PrinterConfig { Station = null, SpoolerName = "" });

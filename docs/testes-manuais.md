@@ -464,10 +464,16 @@ self-contained a cada build), então `dotnet build` na raiz **não** gera o
    quem instalou.
 5. Parear, configurar impressora e imprimir cupom de teste — a partir daqui
    é o roteiro do §3, mas agora saindo de uma instalação de verdade.
-6. **Upgrade in-place:** buildar com `-p:Version=1.0.1`, instalar por cima
+6. **Upgrade in-place:** buildar com `-p:Version=1.0.2`, instalar por cima
    e conferir que o `deviceId` e a impressora configurada sobreviveram
    (`agent.json` não é gravado pelo MSI de propósito) e que não pediu
    reboot — o `util:CloseApplication` fecha o tray antes.
+6b. **Reinstalar a MESMA versão por cima** (sem rebuildar, o mesmo `.msi` do
+   passo 6). Tem que substituir os arquivos de verdade, não sair calado
+   dizendo que já está instalado — é o caso comum de reinstalar o agente no
+   balcão para consertar uma instalação torta, e só funciona por causa do
+   `AllowSameVersionUpgrades="yes"` no `MajorUpgrade`. Conferir também que
+   sobrou **uma** entrada em "Aplicativos e Recursos", não duas.
 7. **Desinstalar** pelo Painel de Controle / Aplicativos e Recursos e
    conferir:
    - `Get-Service DiskPratoPrintAgent` → não existe mais.
@@ -483,8 +489,8 @@ self-contained a cada build), então `dotnet build` na raiz **não** gera o
 
 ### Critério de sucesso
 
-Todos os itens dos passos 3, 4, 6 e 7 conferem, e o passo 5 chega ao cupom
-impresso sem abrir terminal nem editar arquivo.
+Todos os itens dos passos 3, 4, 6, 6b e 7 conferem, e o passo 5 chega ao
+cupom impresso sem abrir terminal nem editar arquivo.
 
 ### O que este teste não cobre
 

@@ -7,7 +7,7 @@
     <LangVersion>latest</LangVersion>
     <!-- Versão única do agente: vira o FileVersion dos .exe e a ProductVersion
          do .msi (installer/PrintAgent.Installer.wixproj a lê daqui). -->
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
   </PropertyGroup>
 
 </Project>

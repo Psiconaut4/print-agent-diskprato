@@ -24,7 +24,11 @@
 
     <!-- Upgrade in-place: desinstala a versão antiga cedo, com o serviço já
          parado pelo ServiceControl da versão antiga. -->
-    <MajorUpgrade DowngradeErrorMessage="Uma versão mais recente do DiskPrato Print Agent já está instalada." />
+    <!-- AllowSameVersionUpgrades: sem isso, reinstalar a mesma x.y.z por cima
+         não substitui nada (o MSI trata como já instalado). É o caso comum de
+         reinstalar o agente no balcão para consertar uma instalação torta. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="Uma versão mais recente do DiskPrato Print Agent já está instalada." />
 
     <MediaTemplate EmbedCab="yes" />
 
