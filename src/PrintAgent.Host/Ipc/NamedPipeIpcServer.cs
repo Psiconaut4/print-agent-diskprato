@@ -244,7 +244,7 @@ public sealed class NamedPipeIpcServer(
         Target = PrintJobTarget.Kitchen,
         Copies = 1,
         IssuedAt = DateTimeOffset.Now,
-        Restaurant = new Restaurant2 { Name = "Teste de impressão", Phone = null, AddressLine = null },
+        Restaurant = new Restaurant2 { Name = "DiskPrato", Phone = null, AddressLine = null },
         Order = new PrintOrder
         {
             Number = "TESTE",

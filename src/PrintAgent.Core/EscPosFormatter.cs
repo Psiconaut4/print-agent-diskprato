@@ -5,7 +5,7 @@ using PrintAgent.Contracts;
 namespace PrintAgent.Core;
 
 /// <summary>
-/// Converte um <see cref="PrintJob"/> em bytes ESC/POS crus (plano §5).
+/// Converte um <see cref="PrintJob"/> em bytes ESC/POS crus
 /// Puramente formatação: não conhece HTTP, Win32 nem a impressora física —
 /// quem manda os bytes é <c>PrintAgent.Printing</c>.
 /// </summary>
@@ -169,8 +169,7 @@ public sealed class EscPosFormatter
             WriteLine(buffer, encoding, profile, $"obs: {order.Notes}", columns);
         }
 
-        // Preços/pagamento/totais: comanda de produção não é recibo fiscal,
-        // essa seção inteira não existe nela (plano §10).
+        // Preços/pagamento/totais: comanda de produção não é recibo fiscal
         if (!isProduction)
         {
             WriteSeparator(buffer, encoding, columns);
