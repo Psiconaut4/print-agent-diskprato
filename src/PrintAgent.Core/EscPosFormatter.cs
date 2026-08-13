@@ -53,16 +53,15 @@ public sealed class EscPosFormatter
         // agentes/pedidos que não passaram por roteamento não têm o campo.
         var isProduction = job.PrintMode == PrintJobPrintMode.Production;
 
-        // Cabeçalho: nome do restaurante centralizado, dobro de altura.
+        // Cabeçalho: número do pedido centralizado, negrito, tamanho dobrado.
+        // Nome/telefone do restaurante não aparecem mais no cupom (plano
+        // COMANDA-E-NUMERO-PEDIDO.md §Parte B — decisão confirmada).
         SetAlign(buffer, Align.Center);
         SetSize(buffer, doubleWidth: true, doubleHeight: true);
-        WriteLine(buffer, encoding, profile, job.Restaurant.Name, columns);
+        SetEmphasis(buffer, on: true);
+        WriteLine(buffer, encoding, profile, $"---- PEDIDO {order.Number} -----", columns);
+        SetEmphasis(buffer, on: false);
         SetSize(buffer, doubleWidth: false, doubleHeight: false);
-
-        if (!string.IsNullOrWhiteSpace(job.Restaurant.Phone))
-        {
-            WriteLine(buffer, encoding, profile, job.Restaurant.Phone!, columns);
-        }
 
         // stationLabel já vem pronto em pt-BR do backend (ex. "Cozinha") —
         // o agente não mantém tabela de tradução de target -> texto (plano §10).
@@ -73,60 +72,60 @@ public sealed class EscPosFormatter
             SetEmphasis(buffer, on: false);
         }
 
-        WriteSeparator(buffer, encoding, columns);
-
-        // Pedido: número em esquerda com ênfase, data/hora, tipo de entrega.
-        SetAlign(buffer, Align.Left);
-        SetEmphasis(buffer, on: true);
-        WriteLine(buffer, encoding, profile, $"PEDIDO #{order.Number}", columns);
-        SetEmphasis(buffer, on: false);
-
-        WriteLine(buffer, encoding, profile, FormatOrderDateTime(order), columns);
-
         SetEmphasis(buffer, on: true);
         WriteLine(
             buffer,
             encoding,
             profile,
-            order.FulfillmentType == PrintOrderFulfillmentType.Delivery ? "DELIVERY" : "RETIRADA",
+            order.FulfillmentType == PrintOrderFulfillmentType.Delivery ? "ENTREGA" : "RETIRADA",
             columns);
         SetEmphasis(buffer, on: false);
 
-        WriteSeparator(buffer, encoding, columns);
+        WriteLine(buffer, encoding, profile, $"Momento do pedido: {FormatOrderDateTime(order)}", columns);
+
+        // Corpo do cupom (cliente, itens, totais) em fonte um pouco maior:
+        // só doubleHeight, nunca doubleWidth — largura dobrada quebraria a
+        // conta de dotCount/centralização baseada em profile.Columns.
+        SetSize(buffer, doubleWidth: false, doubleHeight: true);
 
         // Cliente e endereço.
-        WriteLine(buffer, encoding, profile, order.Customer.Name, columns);
-        WriteLine(buffer, encoding, profile, order.Customer.Phone, columns);
+        WriteSectionTitle(buffer, encoding, profile, "INFORMAÇÕES DO CLIENTE", columns);
+        SetAlign(buffer, Align.Left);
 
+        var clientLines = new List<string> { $"Nome: {order.Customer.Name}", $"Número: {order.Customer.Phone}" };
         if (order.FulfillmentType == PrintOrderFulfillmentType.Delivery && order.Delivery is not null)
         {
             if (!string.IsNullOrWhiteSpace(order.Delivery.Address))
             {
-                WriteLine(buffer, encoding, profile, order.Delivery.Address!, columns);
+                clientLines.Add($"Endereço: {order.Delivery.Address}");
             }
 
             if (order.Delivery.DistanceKm is double distanceKm)
             {
-                WriteLine(
-                    buffer,
-                    encoding,
-                    profile,
-                    string.Format(PtBr, "{0:0.0} km", distanceKm),
-                    columns);
+                clientLines.Add(string.Format(PtBr, "Distância: {0:0.0} km", distanceKm));
             }
         }
 
-        WriteSeparator(buffer, encoding, columns);
+        for (var i = 0; i < clientLines.Count; i++)
+        {
+            WriteLine(buffer, encoding, profile, clientLines[i], columns);
+            if (i < clientLines.Count - 1)
+            {
+                WriteBlankLine(buffer);
+            }
+        }
 
-        // Itens. Em production (comanda de cozinha/bar), nome do item em fonte
-        // maior e sem preço — não é recibo fiscal (plano §10).
+        // Itens. Em production (comanda de cozinha/bar), sem preço — não é
+        // recibo fiscal (plano §10). Uma linha em branco entre itens.
+        SetAlign(buffer, Align.Center);
+        WriteSectionTitle(buffer, encoding, profile, "DETALHES DO PEDIDO", columns);
+        SetAlign(buffer, Align.Left);
+
         foreach (var item in order.Items)
         {
             if (isProduction)
             {
-                SetSize(buffer, doubleWidth: false, doubleHeight: true);
                 WriteLine(buffer, encoding, profile, $"{item.Quantity}x {item.Name}", columns);
-                SetSize(buffer, doubleWidth: false, doubleHeight: false);
             }
             else
             {
@@ -162,6 +161,8 @@ public sealed class EscPosFormatter
                 // existe em CP850 (0xFA), então usamos ele como marcador.
                 WriteLine(buffer, encoding, profile, $"   · {comboItem.Name} ({comboItem.Quantity})", columns);
             }
+
+            WriteBlankLine(buffer);
         }
 
         if (!string.IsNullOrWhiteSpace(order.Notes))
@@ -169,21 +170,20 @@ public sealed class EscPosFormatter
             WriteLine(buffer, encoding, profile, $"obs: {order.Notes}", columns);
         }
 
-        // Preços/pagamento/totais: comanda de produção não é recibo fiscal
+        // Preços/pagamento/totais: comanda de produção não é recibo fiscal.
+        // Ordem: Taxa de entrega -> Subtotal -> TOTAL.
         if (!isProduction)
         {
             WriteSeparator(buffer, encoding, columns);
 
-            // Totais.
-            WriteMoneyLine(buffer, encoding, profile, "Subtotal", FormatMoney(order.SubtotalCents), columns);
             if (order.DeliveryFeeCents > 0)
             {
                 WriteMoneyLine(buffer, encoding, profile, "Taxa de entrega", FormatMoney(order.DeliveryFeeCents), columns);
             }
 
-            SetSize(buffer, doubleWidth: false, doubleHeight: true);
+            WriteMoneyLine(buffer, encoding, profile, "Subtotal", FormatMoney(order.SubtotalCents), columns);
+
             WriteMoneyLine(buffer, encoding, profile, "TOTAL", FormatMoney(order.TotalCents), columns);
-            SetSize(buffer, doubleWidth: false, doubleHeight: false);
 
             WriteSeparator(buffer, encoding, columns);
 
@@ -205,6 +205,7 @@ public sealed class EscPosFormatter
             }
         }
 
+        SetSize(buffer, doubleWidth: false, doubleHeight: false);
         WriteSeparator(buffer, encoding, columns);
 
         // Corte parcial, avançando 3 linhas antes.
@@ -306,7 +307,17 @@ public sealed class EscPosFormatter
         buffer.Add(Lf);
     }
 
-    /// <summary>Linha com texto à esquerda e valor monetário alinhado à direita, dentro da largura configurada.</summary>
+    private static void WriteBlankLine(List<byte> buffer) => buffer.Add(Lf);
+
+    /// <summary>Separador, título centralizado, separador — abre uma seção do cupom.</summary>
+    private static void WriteSectionTitle(List<byte> buffer, Encoding encoding, PrinterProfile profile, string title, int columns)
+    {
+        WriteSeparator(buffer, encoding, columns);
+        WriteLine(buffer, encoding, profile, title, columns);
+        WriteSeparator(buffer, encoding, columns);
+    }
+
+    /// <summary>Linha com texto à esquerda e valor monetário alinhado à direita, ligados por pontilhado (dot leaders).</summary>
     private static void WriteMoneyLine(
         List<byte> buffer,
         Encoding encoding,
@@ -329,13 +340,27 @@ public sealed class EscPosFormatter
             leftStripped = leftStripped[..availableForLeft];
         }
 
-        var padding = columns - leftStripped.Length - amountStripped.Length;
-        if (padding < 1)
+        // Margem de um espaço de cada lado dos pontos.
+        var dotCount = columns - leftStripped.Length - amountStripped.Length - 2;
+
+        string line;
+        if (dotCount < 3)
         {
-            padding = 1;
+            // Não cabe pontilhado com folga: cai no preenchimento por
+            // espaço em branco de sempre (leftStripped já foi truncado acima).
+            var padding = columns - leftStripped.Length - amountStripped.Length;
+            if (padding < 1)
+            {
+                padding = 1;
+            }
+
+            line = leftStripped + new string(' ', padding) + amountStripped;
+        }
+        else
+        {
+            line = leftStripped + " " + new string('.', dotCount) + " " + amountStripped;
         }
 
-        var line = leftStripped + new string(' ', padding) + amountStripped;
         buffer.AddRange(encoding.GetBytes(line));
         buffer.Add(Lf);
     }
