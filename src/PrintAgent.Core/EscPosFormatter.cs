@@ -83,36 +83,44 @@ public sealed class EscPosFormatter
 
         WriteLine(buffer, encoding, profile, $"Momento do pedido: {FormatOrderDateTime(order)}", columns);
 
-        // Corpo do cupom (cliente, itens, totais) em fonte um pouco maior:
-        // só doubleHeight, nunca doubleWidth — largura dobrada quebraria a
-        // conta de dotCount/centralização baseada em profile.Columns.
-        SetSize(buffer, doubleWidth: false, doubleHeight: true);
+        // Corpo do cupom (cliente, itens, totais) em altura normal — dobrar a
+        // altura aqui deixava a fonte grande demais; largura nunca dobra,
+        // porque quebraria a conta de dotCount/centralização baseada em
+        // profile.Columns.
+        SetSize(buffer, doubleWidth: false, doubleHeight: false);
 
         // Cliente e endereço.
         WriteSectionTitle(buffer, encoding, profile, "INFORMAÇÕES DO CLIENTE", columns);
         SetAlign(buffer, Align.Left);
 
-        var clientLines = new List<string> { $"Nome: {order.Customer.Name}", $"Número: {order.Customer.Phone}" };
+        // Chave em negrito, valor em fonte normal, cada uma na linha final.
+        var clientLines = new List<(string Key, string Value)> { ("Nome: ", order.Customer.Name), ("Número: ", order.Customer.Phone) };
+        string? distanceLine = null;
         if (order.FulfillmentType == PrintOrderFulfillmentType.Delivery && order.Delivery is not null)
         {
             if (!string.IsNullOrWhiteSpace(order.Delivery.Address))
             {
-                clientLines.Add($"Endereço: {order.Delivery.Address}");
+                clientLines.Add(("Endereço: ", order.Delivery.Address));
             }
 
             if (order.Delivery.DistanceKm is double distanceKm)
             {
-                clientLines.Add(string.Format(PtBr, "Distância: {0:0.0} km", distanceKm));
+                distanceLine = string.Format(PtBr, "Distância: {0:0.0} km", distanceKm);
             }
         }
 
         for (var i = 0; i < clientLines.Count; i++)
         {
-            WriteLine(buffer, encoding, profile, clientLines[i], columns);
-            if (i < clientLines.Count - 1)
+            WriteKeyValueLine(buffer, encoding, profile, clientLines[i].Key, clientLines[i].Value, columns);
+            if (i < clientLines.Count - 1 || distanceLine is not null)
             {
                 WriteBlankLine(buffer);
             }
+        }
+
+        if (distanceLine is not null)
+        {
+            WriteLine(buffer, encoding, profile, distanceLine, columns);
         }
 
         // Itens. Em production (comanda de cozinha/bar), sem preço — não é
@@ -121,6 +129,9 @@ public sealed class EscPosFormatter
         WriteSectionTitle(buffer, encoding, profile, "DETALHES DO PEDIDO", columns);
         SetAlign(buffer, Align.Left);
 
+        // Cada subitem (item, modificador, componente de combo) pula uma
+        // linha depois de si — sem isso os complementos ficam grudados uns
+        // nos outros.
         foreach (var item in order.Items)
         {
             if (isProduction)
@@ -138,6 +149,8 @@ public sealed class EscPosFormatter
                     columns);
             }
 
+            WriteBlankLine(buffer);
+
             foreach (var modifier in item.Modifiers ?? Array.Empty<Modifiers>())
             {
                 if (!isProduction && modifier.PriceCents is int priceCents)
@@ -151,6 +164,8 @@ public sealed class EscPosFormatter
                     // Em production, preço nunca é impresso mesmo quando existe.
                     WriteLine(buffer, encoding, profile, $"   + {modifier.Name}", columns);
                 }
+
+                WriteBlankLine(buffer);
             }
 
             foreach (var comboItem in item.ComboItems ?? Array.Empty<ComboItems>())
@@ -160,9 +175,8 @@ public sealed class EscPosFormatter
                 // impressora bipa em vez de imprimir. U+00B7 (middle dot)
                 // existe em CP850 (0xFA), então usamos ele como marcador.
                 WriteLine(buffer, encoding, profile, $"   · {comboItem.Name} ({comboItem.Quantity})", columns);
+                WriteBlankLine(buffer);
             }
-
-            WriteBlankLine(buffer);
         }
 
         if (!string.IsNullOrWhiteSpace(order.Notes))
@@ -181,9 +195,9 @@ public sealed class EscPosFormatter
                 WriteMoneyLine(buffer, encoding, profile, "Taxa de entrega", FormatMoney(order.DeliveryFeeCents), columns);
             }
 
-            WriteMoneyLine(buffer, encoding, profile, "Subtotal", FormatMoney(order.SubtotalCents), columns);
+            WriteMoneyLine(buffer, encoding, profile, "Subtotal", FormatMoney(order.SubtotalCents), columns, boldLabel: true);
 
-            WriteMoneyLine(buffer, encoding, profile, "TOTAL", FormatMoney(order.TotalCents), columns);
+            WriteMoneyLine(buffer, encoding, profile, "TOTAL", FormatMoney(order.TotalCents), columns, boldLabel: true);
 
             WriteSeparator(buffer, encoding, columns);
 
@@ -309,12 +323,27 @@ public sealed class EscPosFormatter
 
     private static void WriteBlankLine(List<byte> buffer) => buffer.Add(Lf);
 
-    /// <summary>Separador, título centralizado, separador — abre uma seção do cupom.</summary>
+    /// <summary>Separador, título centralizado em negrito, separador — abre uma seção do cupom.</summary>
     private static void WriteSectionTitle(List<byte> buffer, Encoding encoding, PrinterProfile profile, string title, int columns)
     {
         WriteSeparator(buffer, encoding, columns);
+        SetEmphasis(buffer, on: true);
         WriteLine(buffer, encoding, profile, title, columns);
+        SetEmphasis(buffer, on: false);
         WriteSeparator(buffer, encoding, columns);
+    }
+
+    /// <summary>Linha "chave: valor" — chave em negrito, valor em fonte normal.</summary>
+    private static void WriteKeyValueLine(List<byte> buffer, Encoding encoding, PrinterProfile profile, string key, string value, int columns)
+    {
+        var keyStripped = ApplyAccentStripping(key, profile.StripAccents);
+        var valueStripped = ApplyAccentStripping(value, profile.StripAccents);
+
+        SetEmphasis(buffer, on: true);
+        buffer.AddRange(encoding.GetBytes(keyStripped));
+        SetEmphasis(buffer, on: false);
+        buffer.AddRange(encoding.GetBytes(valueStripped));
+        buffer.Add(Lf);
     }
 
     /// <summary>Linha com texto à esquerda e valor monetário alinhado à direita, ligados por pontilhado (dot leaders).</summary>
@@ -324,7 +353,8 @@ public sealed class EscPosFormatter
         PrinterProfile profile,
         string left,
         string amount,
-        int columns)
+        int columns,
+        bool boldLabel = false)
     {
         var leftStripped = ApplyAccentStripping(left, profile.StripAccents);
         var amountStripped = ApplyAccentStripping(amount, profile.StripAccents);
@@ -343,7 +373,7 @@ public sealed class EscPosFormatter
         // Margem de um espaço de cada lado dos pontos.
         var dotCount = columns - leftStripped.Length - amountStripped.Length - 2;
 
-        string line;
+        string rest;
         if (dotCount < 3)
         {
             // Não cabe pontilhado com folga: cai no preenchimento por
@@ -354,14 +384,25 @@ public sealed class EscPosFormatter
                 padding = 1;
             }
 
-            line = leftStripped + new string(' ', padding) + amountStripped;
+            rest = new string(' ', padding) + amountStripped;
         }
         else
         {
-            line = leftStripped + " " + new string('.', dotCount) + " " + amountStripped;
+            rest = " " + new string('.', dotCount) + " " + amountStripped;
         }
 
-        buffer.AddRange(encoding.GetBytes(line));
+        if (boldLabel)
+        {
+            SetEmphasis(buffer, on: true);
+            buffer.AddRange(encoding.GetBytes(leftStripped));
+            SetEmphasis(buffer, on: false);
+            buffer.AddRange(encoding.GetBytes(rest));
+        }
+        else
+        {
+            buffer.AddRange(encoding.GetBytes(leftStripped + rest));
+        }
+
         buffer.Add(Lf);
     }
 

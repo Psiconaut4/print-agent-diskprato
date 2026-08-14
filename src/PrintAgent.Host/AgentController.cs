@@ -9,7 +9,13 @@ namespace PrintAgent.Host;
 
 /// <summary>Retrato do estado do agente para <c>get-status</c> no named pipe (plano §7.4).</summary>
 public sealed record AgentStatusSnapshot(
-    bool Paired, bool StreamConnected, int QueuedJobs, string Transport, string? PrinterTarget, string PrinterStatus);
+    bool Paired,
+    bool StreamConnected,
+    int QueuedJobs,
+    string Transport,
+    string? PrinterTarget,
+    string PrinterStatus,
+    string AgentVersion);
 
 /// <summary>
 /// Estado compartilhado entre o <see cref="Worker"/> (loop de impressão) e o
