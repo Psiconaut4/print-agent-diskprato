@@ -1,4 +1,4 @@
-# DiskPrato Print Agent
+# Agente de Impressão DiskPrato
 
 Agente Windows que imprime as comandas do DiskPrato na impressora térmica do
 balcão. Roda como serviço, convive com o PDV já instalado e continua

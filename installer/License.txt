@@ -1,6 +1,6 @@
-# Termos de uso — DiskPrato Print Agent
+# Termos de uso — Gerente de Impressão DiskPrato
 
-Este documento rege o uso do DiskPrato Print Agent ("agente"), o programa que
+Este documento rege o uso do Gerente de Impressão DiskPrato ("agente"), o programa que
 recebe os pedidos feitos na plataforma DiskPrato e os imprime na impressora
 térmica do estabelecimento. Ao instalar o agente, o estabelecimento declara
 concordar com estes termos.

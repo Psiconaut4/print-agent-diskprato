@@ -10,7 +10,7 @@
     crash, tray no startup, ACL restrita no %ProgramData% (plano §7.2) e
     desinstalação que não deixa serviço órfão nem arquivo para trás.
   -->
-  <Package Name="DiskPrato Print Agent"
+  <Package Name="Agente de Impressão DiskPrato"
            Manufacturer="DiskPrato"
            Version="$(var.AgentVersion)"
            UpgradeCode="6C239F90-40BA-4EA1-8681-4B92278C123F"
@@ -28,11 +28,11 @@
          não substitui nada (o MSI trata como já instalado). É o caso comum de
          reinstalar o agente no balcão para consertar uma instalação torta. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
-                  DowngradeErrorMessage="Uma versão mais recente do DiskPrato Print Agent já está instalada." />
+                  DowngradeErrorMessage="Uma versão mais recente do Gerente de Impressão DiskPrato já está instalada." />
 
     <MediaTemplate EmbedCab="yes" />
 
-    <Launch Condition="VersionNT64" Message="O DiskPrato Print Agent só roda em Windows 64 bits." />
+    <Launch Condition="VersionNT64" Message="O Agente de Impressão DiskPrato só roda em Windows 64 bits." />
 
     <!-- Multi-resolução (16..256): a ARP e o atalho do menu Iniciar pedem os
          tamanhos pequenos; o icon-256.ico original só tem o frame de 256. -->
@@ -49,7 +49,7 @@
                            RebootPrompt="no"
                            Timeout="10" />
 
-    <Feature Id="Main" Title="DiskPrato Print Agent" Level="1" AllowAbsent="no" AllowAdvertise="no">
+    <Feature Id="Main" Title="Agente de Impressão DiskPrato" Level="1" AllowAbsent="no" AllowAdvertise="no">
       <ComponentGroupRef Id="AgentComponents" />
     </Feature>
 

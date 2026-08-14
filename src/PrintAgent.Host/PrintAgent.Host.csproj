@@ -11,7 +11,7 @@
     <UserSecretsId>dotnet-PrintAgent.Host-572eb9c7-5776-451b-bb51-baba282eb744</UserSecretsId>
     <ApplicationIcon>..\..\resources\icon-16-256.ico</ApplicationIcon>
     <AssemblyTitle>DiskPrato Print Agent Service</AssemblyTitle>
-    <Product>DiskPrato Print Agent</Product>
+    <Product>Gerente de Impressão DiskPrato</Product>
     <Company>DiskPrato</Company>
   </PropertyGroup>
 

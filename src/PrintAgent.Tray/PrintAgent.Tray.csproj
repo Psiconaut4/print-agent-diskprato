@@ -7,8 +7,8 @@
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>..\..\resources\icon-16-256.ico</ApplicationIcon>
-    <AssemblyTitle>DiskPrato Print Agent</AssemblyTitle>
-    <Product>DiskPrato Print Agent</Product>
+    <AssemblyTitle>Gerente de Impressão DiskPrato</AssemblyTitle>
+    <Product>Gerente de Impressão DiskPrato</Product>
     <Company>DiskPrato</Company>
   </PropertyGroup>
 
