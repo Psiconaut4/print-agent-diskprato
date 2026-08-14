@@ -13,6 +13,7 @@ src/PrintAgent.Contracts/Generated/
 # arquitetura interna e o roteamento do backend. Continua na maquina de quem
 # desenvolve (CLAUDE.md aponta para ele como fonte da verdade), so nao sobe.
 docs/plan/
+/docs/*
 
 # User-specific files
 *.rsuser
