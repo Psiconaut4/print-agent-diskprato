@@ -107,7 +107,7 @@ public sealed class SetupForm : Form
     {
         _ipc = ipc;
 
-        Text = "Gerente de Impressão DiskPrato — Configuração";
+        Text = TitleFor(null);
         // Janela redimensionavel e minimizavel: com varias secoes de estacao a
         // tela passa da altura util do monitor, e com FixedDialog o unico jeito
         // de alcancar as secoes de baixo era rolar o painel interno.
@@ -233,8 +233,21 @@ public sealed class SetupForm : Form
     /// <summary>Chamado pelo <see cref="TrayApplicationContext"/> a cada rodada de polling — mantém o resumo no topo sempre atual mesmo com a tela aberta.</summary>
     public void OnStatusUpdated(IpcResponseDto response) => ApplyStatus(response.Ok ? response.Status : null, response.Ok ? null : response.Error);
 
+    /// <summary>"Gerente de Impressão DiskPrato v1.1.1 — Configuração" — versão do
+    /// serviço em execução (não a do Tray.exe), lida do status a cada polling,
+    /// pra bater o olho e saber o que está instalado sem abrir o instalador.</summary>
+    private static string TitleFor(AgentStatusDto? status)
+    {
+        const string baseTitle = "Gerente de Impressão DiskPrato";
+        return string.IsNullOrWhiteSpace(status?.AgentVersion)
+            ? $"{baseTitle} — Configuração"
+            : $"{baseTitle} v{status.AgentVersion} — Configuração";
+    }
+
     private void ApplyStatus(AgentStatusDto? status, string? error)
     {
+        Text = TitleFor(status);
+
         // Mesma paleta do ícone da bandeja (cinza/vermelho/laranja/verde) —
         // o resumo aqui e o ícone sempre concordam sobre o estado atual.
         _summaryLabel.ForeColor = TrayIcons.ColorFor(status);

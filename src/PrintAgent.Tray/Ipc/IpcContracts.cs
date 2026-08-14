@@ -52,6 +52,7 @@ public sealed class AgentStatusDto
     public string Transport { get; set; } = "";
     public string? PrinterTarget { get; set; }
     public string PrinterStatus { get; set; } = "Unknown";
+    public string AgentVersion { get; set; } = "";
 }
 
 /// <summary>Espelha <c>PrintAgent.Host.Ipc.IpcRequest</c>.</summary>

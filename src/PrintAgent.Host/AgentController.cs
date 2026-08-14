@@ -175,7 +175,8 @@ public sealed class AgentController
             _jobStore.GetQueueLength(),
             printer.Transport.ToString(),
             printer.Transport == PrinterTransportKind.Spooler ? printer.SpoolerName : printer.Host,
-            (await QueryPrinterStatusAsync(printer, ct).ConfigureAwait(false)).ToString());
+            (await QueryPrinterStatusAsync(printer, ct).ConfigureAwait(false)).ToString(),
+            Diagnostics.AgentVersion.Current);
     }
 
     /// <summary>

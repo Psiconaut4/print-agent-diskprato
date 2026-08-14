@@ -10,12 +10,20 @@ namespace PrintAgent.Tray;
 /// </summary>
 public sealed class TrayApplicationContext : ApplicationContext
 {
+    private const string AppName = "Gerente de Impressão DiskPrato";
+
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
     private readonly AgentIpcClient _ipc = new();
     private readonly NotifyIcon _icon;
     private readonly System.Windows.Forms.Timer _pollTimer;
     private SetupForm? _setupForm;
+
+    // Versão do serviço, lida a cada polling — não a do Tray.exe: os dois
+    // vêm do mesmo instalador hoje, mas quem importa para diagnóstico é qual
+    // versão do Host está de fato rodando (plano §7.4, Tray nunca assume
+    // nada sobre o serviço fora do que o pipe reporta).
+    private string? _lastKnownVersion;
 
     public TrayApplicationContext()
     {
@@ -29,7 +37,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _icon = new NotifyIcon
         {
             Icon = TrayIcons.Unknown,
-            Text = "Gerente de Impressão DiskPrato",
+            Text = AppName,
             ContextMenuStrip = menu,
             Visible = true,
         };
@@ -59,7 +67,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var result = await _ipc.TestPrintAsync();
         _icon.ShowBalloonTip(
             4000,
-            "Gerente de Impressão DiskPrato",
+            DisplayName(),
             result.Ok ? "Cupom de teste enviado." : $"Falha no teste de impressão: {result.Error}",
             result.Ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
         await RefreshStatusAsync();
@@ -74,7 +82,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         await DiagnosticsExportAction.RunAsync(null, _ipc, (message, ok) =>
             _icon.ShowBalloonTip(
                 4000,
-                "Gerente de Impressão DiskPrato",
+                DisplayName(),
                 message,
                 ok ? ToolTipIcon.Info : ToolTipIcon.Warning));
 
@@ -83,26 +91,39 @@ public sealed class TrayApplicationContext : ApplicationContext
         var response = await _ipc.GetStatusAsync();
         var status = response.Ok ? response.Status : null;
 
+        if (!string.IsNullOrWhiteSpace(status?.AgentVersion))
+        {
+            _lastKnownVersion = status.AgentVersion;
+        }
+
         _icon.Icon = TrayIcons.For(status);
         _icon.Text = Truncate(Describe(status, response.Ok ? null : response.Error), 127);
 
         _setupForm?.OnStatusUpdated(response);
     }
 
-    private static string Describe(AgentStatusDto? status, string? error)
+    /// <summary>"Gerente de Impressão DiskPrato v1.1.1" — mesma convenção de
+    /// serviços do Windows que mostram a versão ao lado do nome, para não
+    /// precisar abrir o instalador/registro só pra saber o que está rodando.</summary>
+    private string DisplayName() =>
+        string.IsNullOrWhiteSpace(_lastKnownVersion) ? AppName : $"{AppName} v{_lastKnownVersion}";
+
+    private string Describe(AgentStatusDto? status, string? error)
     {
+        var name = DisplayName();
+
         if (status is null)
         {
-            return $"Gerente de Impressão DiskPrato\n{error ?? "Serviço indisponível"}";
+            return $"{name}\n{error ?? "Serviço indisponível"}";
         }
 
         if (!status.Paired)
         {
-            return "Gerente de Impressão DiskPrato\nAguardando pareamento";
+            return $"{name}\nAguardando pareamento";
         }
 
         var connection = status.StreamConnected ? "conectado" : "sem conexão";
-        return $"Gerente de Impressão DiskPrato\n{connection} — {status.QueuedJobs} na fila";
+        return $"{name}\n{connection} — {status.QueuedJobs} na fila";
     }
 
     // NotifyIcon.Text é truncado silenciosamente pelo Windows acima de ~127
