@@ -89,21 +89,49 @@ public sealed class EscPosFormatter
         // profile.Columns.
         SetSize(buffer, doubleWidth: false, doubleHeight: false);
 
-        // Cliente e endereço.
+        // Cliente e endereço — bloco inteiro centralizado.
         WriteSectionTitle(buffer, encoding, profile, "INFORMAÇÕES DO CLIENTE", columns);
-        SetAlign(buffer, Align.Left);
+        SetAlign(buffer, Align.Center);
 
         // Chave em negrito, valor em fonte normal, cada uma na linha final.
         var clientLines = new List<(string Key, string Value)> { ("Nome: ", order.Customer.Name), ("Número: ", order.Customer.Phone) };
         string? distanceLine = null;
         if (order.FulfillmentType == PrintOrderFulfillmentType.Delivery && order.Delivery is not null)
         {
-            if (!string.IsNullOrWhiteSpace(order.Delivery.Address))
+            var delivery = order.Delivery;
+            // Campos estruturados (contrato 1.2.0) têm prioridade; `address`
+            // (linha única, pré-1.2.0) é o fallback para pedidos/agentes que
+            // ainda não têm rua/bairro/complemento separados.
+            var hasStructuredAddress = !string.IsNullOrWhiteSpace(delivery.Street)
+                || !string.IsNullOrWhiteSpace(delivery.Neighborhood)
+                || !string.IsNullOrWhiteSpace(delivery.Complement);
+
+            if (hasStructuredAddress)
             {
-                clientLines.Add(("Endereço: ", order.Delivery.Address));
+                if (!string.IsNullOrWhiteSpace(delivery.Street))
+                {
+                    var streetLine = string.IsNullOrWhiteSpace(delivery.StreetNumber)
+                        ? delivery.Street
+                        : $"{delivery.Street}, {delivery.StreetNumber}";
+                    clientLines.Add(("Endereço: ", streetLine));
+                }
+
+                if (!string.IsNullOrWhiteSpace(delivery.Neighborhood))
+                {
+                    clientLines.Add(("Bairro: ", delivery.Neighborhood));
+                }
+
+                if (!string.IsNullOrWhiteSpace(delivery.Complement))
+                {
+                    clientLines.Add(("Complemento: ", delivery.Complement));
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(delivery.Address))
+            {
+                clientLines.Add(("Endereço: ", delivery.Address));
             }
 
-            if (order.Delivery.DistanceKm is double distanceKm)
+            if (delivery.DistanceKm is double distanceKm)
             {
                 distanceLine = string.Format(PtBr, "Distância: {0:0.0} km", distanceKm);
             }

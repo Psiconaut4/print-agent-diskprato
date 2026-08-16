@@ -86,7 +86,15 @@ public class EscPosFormatterTests
             FulfillmentType = PrintOrderFulfillmentType.Delivery,
             Notes = "Sem cebola, com limões", // õ
             Customer = new Customer { Name = "João", Phone = "18988881111" }, // ã
-            Delivery = new Delivery { Address = "Av. Brasil, 456", DistanceKm = 3.2 },
+            Delivery = new Delivery
+            {
+                Address = "Av. Brasil, 456",
+                Street = "Av. Brasil",
+                StreetNumber = "456",
+                Neighborhood = "Centro",
+                Complement = "Apto 12",
+                DistanceKm = 3.2,
+            },
             Payment = new PrintPayment
             {
                 Method = PrintPaymentMethod.Cash,
@@ -158,7 +166,7 @@ public class EscPosFormatterTests
             "1B45004D6F6D656E746F20646F2070656469646F3A2030382F30382F323032362031323A35380A" +
             "1D21002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
             "1B4501494E464F524D4180E5455320444F20434C49454E54450A1B45002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
-            "1B61001B45014E6F6D653A201B4500416E610A0A1B45014EA36D65726F3A201B450031383939393939303030300A" +
+            "1B61011B45014E6F6D653A201B4500416E610A0A1B45014EA36D65726F3A201B450031383939393939303030300A" +
             "1B61012D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
             "1B4501444554414C48455320444F2050454449444F0A1B45002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
             "1B6100317820418761A1203330306D6C202E2E2E2E2E2E2E2E2E2E2E2E2031322C30300A0A" +
@@ -190,8 +198,11 @@ public class EscPosFormatterTests
             "1B45004D6F6D656E746F20646F2070656469646F3A2030382F30382F323032362031323A35380A" +
             "1D21002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
             "1B4501494E464F524D4180E5455320444F20434C49454E54450A1B45002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
-            "1B61001B45014E6F6D653A201B45004A6FC66F0A0A1B45014EA36D65726F3A201B450031383938383838313131310A0A" +
-            "1B4501456E64657265876F3A201B450041762E2042726173696C2C203435360A0A44697374836E6369613A20332C32206B6D0A" +
+            "1B61011B45014E6F6D653A201B45004A6FC66F0A0A1B45014EA36D65726F3A201B450031383938383838313131310A0A" +
+            "1B4501456E64657265876F3A201B450041762E2042726173696C2C203435360A0A" +
+            "1B450142616972726F3A201B450043656E74726F0A0A" +
+            "1B4501436F6D706C656D656E746F3A201B45004170746F2031320A0A" +
+            "44697374836E6369613A20332C32206B6D0A" +
             "1B61012D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
             "1B4501444554414C48455320444F2050454449444F0A1B45002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0A" +
             "1B6100327820582D53616C616461202E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2035302C30300A0A" +
@@ -321,5 +332,46 @@ public class EscPosFormatterTests
 
         Assert.Equal(single.Length * 3, triple.Length);
         Assert.Equal(Convert.ToHexString(single), Convert.ToHexString(triple[..single.Length]));
+    }
+
+    [Fact]
+    public void Format_delivery_with_structured_address_prints_street_neighborhood_and_complement_as_separate_lines()
+    {
+        var formatter = new EscPosFormatter();
+        var profile = new PrinterProfile(PaperWidthMm: 80, CodePage: 850, EscTIndex: 2, StripAccents: false, Copies: 1);
+
+        var hex = Convert.ToHexString(formatter.Format(BuildFullDeliveryJob(), profile));
+
+        // Rua+número, bairro e complemento saem em linhas separadas — cada uma
+        // com sua própria linha em branco antes/depois (mesmo pulo que já
+        // existe entre nome e telefone), em vez de um único "Endereço: ...".
+        Assert.Contains("1B4501456E64657265876F3A201B450041762E2042726173696C2C203435360A0A", hex); // Endereço: Av. Brasil, 456
+        Assert.Contains("1B450142616972726F3A201B450043656E74726F0A0A", hex); // Bairro: Centro
+        Assert.Contains("1B4501436F6D706C656D656E746F3A201B45004170746F2031320A0A", hex); // Complemento: Apto 12
+
+        // Bloco inteiro (nome, telefone, endereço) centralizado: ESC a 1 logo
+        // antes do "Nome:", não mais ESC a 0 (esquerda).
+        Assert.Contains("1B61011B45014E6F6D653A20", hex);
+    }
+
+    [Fact]
+    public void Format_delivery_without_structured_address_falls_back_to_single_address_line()
+    {
+        var formatter = new EscPosFormatter();
+        var profile = new PrinterProfile(PaperWidthMm: 80, CodePage: 850, EscTIndex: 2, StripAccents: false, Copies: 1);
+
+        var job = BuildFullDeliveryJob();
+        // Pedido antigo / agente anterior ao contrato 1.2.0: só o campo
+        // `address` (linha única) vem preenchido.
+        job.Order.Delivery!.Street = null;
+        job.Order.Delivery!.StreetNumber = null;
+        job.Order.Delivery!.Neighborhood = null;
+        job.Order.Delivery!.Complement = null;
+
+        var hex = Convert.ToHexString(formatter.Format(job, profile));
+
+        Assert.Contains("1B4501456E64657265876F3A201B450041762E2042726173696C2C203435360A0A", hex); // Endereço: Av. Brasil, 456
+        Assert.DoesNotContain("42616972726F3A20", hex); // sem "Bairro:"
+        Assert.DoesNotContain("436F6D706C656D656E746F3A20", hex); // sem "Complemento:"
     }
 }

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "DiskPrato Print Agent API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "Contrato entre o backend DiskPrato e o Print Agent (.NET) instalado na loja.\n\nEste arquivo e a fonte da verdade compartilhada entre os dois repositorios.\nO repositorio do agente gera seus DTOs C# a partir daqui (NSwag/openapi-generator).\nO backend valida os payloads emitidos contra os schemas de `components.schemas`\nem teste de contrato.\n\nRegras de compatibilidade:\n- O caminho carrega a versao major (`/api/print-agents/v1/...`). Quebra de\n  contrato = nova major, e o backend serve N e N-1 simultaneamente por pelo\n  menos um ciclo de release do agente.\n- Dentro de uma major, o backend so ADICIONA campos. O agente deve ignorar\n  campos desconhecidos e nunca falhar por causa deles.\n- Campos marcados `x-since` foram adicionados depois do 1.0.0: o agente deve\n  trata-los como opcionais.",
     "contact": { "name": "DiskPrato" }
   },
@@ -554,7 +554,27 @@
             "type": ["object", "null"],
             "description": "Sempre `null` quando `fulfillmentType` e `pickup`.",
             "properties": {
-              "address": { "type": ["string", "null"] },
+              "address": {
+                "type": ["string", "null"],
+                "description": "Endereco completo em uma unica linha (rua, numero, bairro, complemento ja concatenados). Mantido para compatibilidade com agentes antigos e como fallback quando os campos estruturados abaixo nao vierem preenchidos."
+              },
+              "street": {
+                "type": ["string", "null"],
+                "x-since": "1.2.0",
+                "description": "Rua/logradouro, separado do numero. Ausente em pedidos anteriores a 1.2.0: o agente deve usar `address` nesse caso."
+              },
+              "streetNumber": {
+                "type": ["string", "null"],
+                "x-since": "1.2.0"
+              },
+              "neighborhood": {
+                "type": ["string", "null"],
+                "x-since": "1.2.0"
+              },
+              "complement": {
+                "type": ["string", "null"],
+                "x-since": "1.2.0"
+              },
               "distanceKm": { "type": ["number", "null"] }
             }
           },
