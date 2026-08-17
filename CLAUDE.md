@@ -84,11 +84,11 @@ single-file quebra a descoberta de sinks por configuração);
 `device.dat`** — ele lista o que quer incluir, em vez de excluir o que não
 deve ir.
 
-**Backend em fase de teste:** o default de `AgentConfig.ApiBaseUrl` aponta
-para o túnel Cloudflare (`https://app.psiconaut4.com.br`), não para
-`api.diskprato.com`. O default só vale para `agent.json` recém-criado —
-depois disso o valor no arquivo manda. O `ApiBaseUrl` é **só a origem, sem
-caminho**: o prefixo `/api` já está nos caminhos dos clientes
+**Backend em produção:** o default de `AgentConfig.ApiBaseUrl` aponta para o
+domínio definitivo (`https://api.diskprato.tech`). O default só vale para
+`agent.json` recém-criado — depois disso o valor no arquivo manda. O
+`ApiBaseUrl` é **só a origem, sem caminho**: o prefixo `/api` já está nos
+caminhos dos clientes
 (`/api/print-agents/v1/...`), que são root-relative, então um caminho posto
 ali é descartado em silêncio na resolução da URI — `StartupSelfTest` avisa.
 

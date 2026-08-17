@@ -5,9 +5,8 @@ public sealed class AgentConfig
 {
     /// <summary>
     /// Só vale para <c>agent.json</c> recém-criado: assim que o arquivo existe,
-    /// o valor gravado nele manda. Aponta para o túnel Cloudflare enquanto o
-    /// backend está em fase de teste; vira <c>https://api.diskprato.com</c>
-    /// quando o domínio definitivo entrar no ar.
+    /// o valor gravado nele manda. Aponta para o domínio definitivo de
+    /// produção, <c>https://api.diskprato.tech</c>.
     /// <para>
     /// É só a origem, sem caminho: o prefixo <c>/api</c> já está nos caminhos
     /// dos clientes (<c>/api/print-agents/v1/...</c>), que são root-relative.
@@ -15,7 +14,7 @@ public sealed class AgentConfig
     /// — <see cref="Diagnostics.StartupSelfTest"/> avisa se isso acontecer.
     /// </para>
     /// </summary>
-    public string ApiBaseUrl { get; set; } = "https://app.psiconaut4.com.br";
+    public string ApiBaseUrl { get; set; } = "https://api.diskprato.tech";
 
     /// <summary>Preenchido após o pareamento (plano §6.1). Null enquanto o dispositivo não foi pareado.</summary>
     public string? DeviceId { get; set; }

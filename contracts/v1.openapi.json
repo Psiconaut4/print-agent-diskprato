@@ -6,7 +6,7 @@
     "description": "Contrato entre o backend DiskPrato e o Print Agent (.NET) instalado na loja.\n\nEste arquivo e a fonte da verdade compartilhada entre os dois repositorios.\nO repositorio do agente gera seus DTOs C# a partir daqui (NSwag/openapi-generator).\nO backend valida os payloads emitidos contra os schemas de `components.schemas`\nem teste de contrato.\n\nRegras de compatibilidade:\n- O caminho carrega a versao major (`/api/print-agents/v1/...`). Quebra de\n  contrato = nova major, e o backend serve N e N-1 simultaneamente por pelo\n  menos um ciclo de release do agente.\n- Dentro de uma major, o backend so ADICIONA campos. O agente deve ignorar\n  campos desconhecidos e nunca falhar por causa deles.\n- Campos marcados `x-since` foram adicionados depois do 1.0.0: o agente deve\n  trata-los como opcionais.",
     "contact": { "name": "DiskPrato" }
   },
-  "servers": [{ "url": "https://api.diskprato.com", "description": "producao" }],
+  "servers": [{ "url": "https://api.diskprato.tech", "description": "producao" }],
   "tags": [
     {
       "name": "device",
