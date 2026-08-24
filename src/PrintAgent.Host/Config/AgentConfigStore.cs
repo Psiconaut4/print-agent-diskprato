@@ -5,7 +5,7 @@ namespace PrintAgent.Host.Config;
 
 /// <summary>
 /// Lê/escreve <c>agent.json</c> (plano §7.3). Arquivo, não registry: dá para
-/// o suporte pedir print da tela por WhatsApp e diagnosticar em segundos.
+/// o suporte pedir print da tela e diagnosticar em segundos.
 /// </summary>
 public sealed class AgentConfigStore
 {
