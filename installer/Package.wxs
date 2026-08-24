@@ -10,7 +10,11 @@
     crash, tray no startup, ACL restrita no %ProgramData% (plano §7.2) e
     desinstalação que não deixa serviço órfão nem arquivo para trás.
   -->
-  <Package Name="Agente de Impressão DiskPrato"
+  <!-- A versão vai no próprio nome: o "Aplicativos Instalados" do Windows 11
+       não mostra mais a coluna de versão, e o suporte precisa saber por
+       telefone qual versão está no balcão. ProductName pode mudar entre
+       versões — o upgrade in-place casa por UpgradeCode, não pelo nome. -->
+  <Package Name="Agente de Impressão DiskPrato v$(var.AgentVersion)"
            Manufacturer="DiskPrato"
            Version="$(var.AgentVersion)"
            UpgradeCode="6C239F90-40BA-4EA1-8681-4B92278C123F"
@@ -38,7 +42,7 @@
          tamanhos pequenos; o icon-256.ico original só tem o frame de 256. -->
     <Icon Id="AppIcon.ico" SourceFile="$(var.ResourcesDir)icon-16-256.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
-    <Property Id="ARPHELPLINK" Value="https://psiconaut4.com.br" />
+    <Property Id="ARPHELPLINK" Value="https://diskprato.tech" />
 
     <!-- O tray segura o próprio .exe aberto; sem fechá-lo, upgrade e
          desinstalação caem em "arquivo em uso" / pedido de reboot. -->
