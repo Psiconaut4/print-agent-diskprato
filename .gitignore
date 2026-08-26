@@ -9,6 +9,9 @@
 # Contratos gerados a cada build por PrintAgent.Contracts (NSwag) — nunca editar a mao
 src/PrintAgent.Contracts/Generated/
 
+# OpenAPI spec — contrato compartilhado com o backend, mas expoe superficie da API
+contracts/
+
 # Fora do versionamento porque o repositorio e publico: o plano descreve a
 # arquitetura interna e o roteamento do backend. Continua na maquina de quem
 # desenvolve (CLAUDE.md aponta para ele como fonte da verdade), so nao sobe.
