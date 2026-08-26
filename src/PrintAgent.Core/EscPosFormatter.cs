@@ -82,6 +82,7 @@ public sealed class EscPosFormatter
         SetEmphasis(buffer, on: false);
 
         WriteLine(buffer, encoding, profile, $"Momento do pedido: {FormatOrderDateTime(order)}", columns);
+        WriteBlankLine(buffer);
 
         // Corpo do cupom (cliente, itens, totais) em altura normal — dobrar a
         // altura aqui deixava a fonte grande demais; largura nunca dobra,
@@ -90,7 +91,9 @@ public sealed class EscPosFormatter
         SetSize(buffer, doubleWidth: false, doubleHeight: false);
 
         // Cliente e endereço — bloco inteiro centralizado.
+        WriteBlankLine(buffer);
         WriteSectionTitle(buffer, encoding, profile, "INFORMAÇÕES DO CLIENTE", columns);
+        WriteBlankLine(buffer);
         SetAlign(buffer, Align.Center);
 
         // Chave em negrito, valor em fonte normal, cada uma na linha final.
@@ -151,10 +154,14 @@ public sealed class EscPosFormatter
             WriteLine(buffer, encoding, profile, distanceLine, columns);
         }
 
+        WriteBlankLine(buffer);
+
         // Itens. Em production (comanda de cozinha/bar), sem preço — não é
         // recibo fiscal (plano §10). Uma linha em branco entre itens.
         SetAlign(buffer, Align.Center);
+        WriteBlankLine(buffer);
         WriteSectionTitle(buffer, encoding, profile, "DETALHES DO PEDIDO", columns);
+        WriteBlankLine(buffer);
         SetAlign(buffer, Align.Left);
 
         // Cada subitem (item, modificador, componente de combo) pula uma
@@ -164,7 +171,9 @@ public sealed class EscPosFormatter
         {
             if (isProduction)
             {
+                SetEmphasis(buffer, on: true);
                 WriteLine(buffer, encoding, profile, $"{item.Quantity}x {item.Name}", columns);
+                SetEmphasis(buffer, on: false);
             }
             else
             {
@@ -174,7 +183,8 @@ public sealed class EscPosFormatter
                     profile,
                     $"{item.Quantity}x {item.Name}",
                     FormatMoney(item.TotalPriceCents),
-                    columns);
+                    columns,
+                    boldLabel: true);
             }
 
             WriteBlankLine(buffer);
@@ -209,8 +219,11 @@ public sealed class EscPosFormatter
 
         if (!string.IsNullOrWhiteSpace(order.Notes))
         {
+            WriteBlankLine(buffer);
             WriteLine(buffer, encoding, profile, $"obs: {order.Notes}", columns);
         }
+
+        WriteBlankLine(buffer);
 
         // Preços/pagamento/totais: comanda de produção não é recibo fiscal.
         // Ordem: Taxa de entrega -> Subtotal -> TOTAL.
@@ -231,20 +244,28 @@ public sealed class EscPosFormatter
 
             // Pagamento.
             var payment = order.Payment;
+            SetEmphasis(buffer, on: true);
             WriteLine(buffer, encoding, profile, payment.Label, columns);
+            SetEmphasis(buffer, on: false);
             if (payment.ChangeForCents is int changeForCents)
             {
                 var changeDue = payment.ChangeDueCents is int due ? FormatMoney(due) : "?";
                 // "->" em vez de U+2192 (→): a seta não existe em CP850/CP860 e o
                 // fallback padrão do .NET a substitui silenciosamente por 0x1A
                 // (SUB) em vez de lançar — mesma armadilha do marcador de combo.
+                SetEmphasis(buffer, on: true);
                 WriteLine(
                     buffer,
                     encoding,
                     profile,
                     $"Troco para {FormatMoney(changeForCents)} -> {changeDue}",
                     columns);
+                SetEmphasis(buffer, on: false);
             }
+        }
+        else
+        {
+            WriteBlankLine(buffer);
         }
 
         SetSize(buffer, doubleWidth: false, doubleHeight: false);

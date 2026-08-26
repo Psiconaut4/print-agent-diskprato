@@ -244,42 +244,92 @@ public sealed class NamedPipeIpcServer(
         Target = PrintJobTarget.Kitchen,
         Copies = 1,
         IssuedAt = DateTimeOffset.Now,
-        Restaurant = new Restaurant2 { Name = "DiskPrato", Phone = null, AddressLine = null },
+        Restaurant = new Restaurant2 { Name = "DiskPrato", Phone = "+55 11 99999-0000", AddressLine = "Rua de Teste, 123" },
         Order = new PrintOrder
         {
-            Number = "TESTE",
+            Number = "TESTE-001",
             CreatedAt = DateTimeOffset.Now,
-            Timezone = null,
-            FulfillmentType = PrintOrderFulfillmentType.Pickup,
-            // Hifen comum, nao travessao: "—" (U+2014) nao existe na CP850/CP860
-            // e sai como "?" no cupom impresso — validado numa impressora de
-            // rede falsa em 2026-08-10.
-            Notes = "Cupom de teste - configuração do PrintAgent",
-            Customer = new Customer { Name = "Teste", Phone = "" },
-            Delivery = null,
+            Timezone = "America/Sao_Paulo",
+            FulfillmentType = PrintOrderFulfillmentType.Delivery,
+            Notes = "Cupom de teste completo - configuração do PrintAgent\nEste cupom verifica formatação, acentos, espaçamento e negrito",
+            Customer = new Customer { Name = "João da Silva Teste", Phone = "+55 11 98888-7777" },
+            Delivery = new Delivery
+            {
+                Address = "Av. Paulista, 1000",
+                Street = "Av. Paulista",
+                StreetNumber = "1000",
+                Neighborhood = "Bela Vista",
+                Complement = "Andar 5, Sala 501",
+                DistanceKm = 5.5,
+            },
             Payment = new PrintPayment
             {
                 Method = PrintPaymentMethod.Cash,
-                Status = PrintPaymentStatus.Paid,
-                Label = "Teste",
-                ChangeForCents = null,
-                ChangeDueCents = null,
+                Status = PrintPaymentStatus.Pending,
+                Label = "Dinheiro",
+                ChangeForCents = 10000,
+                ChangeDueCents = 3750,
             },
             Items =
             [
                 new PrintItem
                 {
+                    Quantity = 2,
+                    Name = "X-Bacon com Queijo Extra (ç ã õ é)",
+                    UnitPriceCents = 2850,
+                    TotalPriceCents = 5700,
+                    Modifiers =
+                    [
+                        new Modifiers { GroupName = "Adicionais", Name = "Bacon", PriceCents = 300 },
+                        new Modifiers { GroupName = "Adicionais", Name = "Cheddar", PriceCents = 250 },
+                        new Modifiers { GroupName = "Molhos", Name = "Maionese Caseira", PriceCents = null },
+                    ],
+                    ComboItems = [],
+                },
+                new PrintItem
+                {
                     Quantity = 1,
-                    Name = "Item de teste (ç ã õ é)",
-                    UnitPriceCents = 0,
-                    TotalPriceCents = 0,
+                    Name = "Batata Frita Grande",
+                    UnitPriceCents = 1500,
+                    TotalPriceCents = 1500,
+                    Modifiers =
+                    [
+                        new Modifiers { GroupName = "Temperos", Name = "Alecrim", PriceCents = 0 },
+                        new Modifiers { GroupName = "Temperos", Name = "Alho", PriceCents = 0 },
+                    ],
+                    ComboItems = [],
+                },
+                new PrintItem
+                {
+                    Quantity = 1,
+                    Name = "Combo Família Completo",
+                    UnitPriceCents = 4500,
+                    TotalPriceCents = 4500,
                     Modifiers = [],
+                    ComboItems =
+                    [
+                        new ComboItems { Name = "Coca-Cola 350ml", Quantity = 2 },
+                        new ComboItems { Name = "Batata Frita Média", Quantity = 1 },
+                        new ComboItems { Name = "Nuggets 10 unidades", Quantity = 1 },
+                    ],
+                },
+                new PrintItem
+                {
+                    Quantity = 3,
+                    Name = "Hambúrguer Artesanal",
+                    UnitPriceCents = 2200,
+                    TotalPriceCents = 6600,
+                    Modifiers =
+                    [
+                        new Modifiers { GroupName = "Ponto", Name = "Mal Passado", PriceCents = null },
+                        new Modifiers { GroupName = "Queijo", Name = "Prato", PriceCents = 150 },
+                    ],
                     ComboItems = [],
                 },
             ],
-            SubtotalCents = 0,
-            DeliveryFeeCents = 0,
-            TotalCents = 0,
+            SubtotalCents = 18300,
+            DeliveryFeeCents = 750,
+            TotalCents = 19050,
             Currency = PrintOrderCurrency.BRL,
         },
     };
