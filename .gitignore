@@ -18,6 +18,11 @@ contracts/
 docs/plan/
 /docs/*
 
+# Instrucoes de projeto para o Claude Code — descreve arquitetura interna
+# (rotas da API, IPC, fila local). Repositorio e publico so para o download
+# do .msi; o arquivo continua na maquina de quem desenvolve, so nao sobe.
+/CLAUDE.md
+
 # User-specific files
 *.rsuser
 *.suo

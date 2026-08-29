@@ -38,19 +38,3 @@ configurada são preservados.
 No menu do ícone da bandeja, **"Exportar diagnóstico..."** gera um `.zip` na
 Área de Trabalho com os logs, a configuração e o estado da fila. É o que o
 suporte precisa. O pacote **não** inclui o token do dispositivo.
-
-## Desenvolvimento
-
-```powershell
-dotnet build      # 0 avisos, 0 erros (warnings as errors)
-dotnet test
-
-# O .msi fica fora da solution porque cada build publica ~190 MB
-dotnet build installer/PrintAgent.Installer.wixproj -c Release
-```
-
-O `.msi` é publicado automaticamente ao empurrar uma tag `vX.Y.Z`, e a versão
-da tag precisa bater com o `<Version>` do `Directory.Build.props`.
-
-Convenções, arquitetura e o porquê das decisões estão no `CLAUDE.md`. O
-documento de plano detalhado (`docs/plan/`) não é versionado.
